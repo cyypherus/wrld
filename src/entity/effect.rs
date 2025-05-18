@@ -1,5 +1,6 @@
 use std::fmt;
-use std::time::Duration;
+
+use super::item::ItemBox;
 
 // Forward declaration to avoid circular references
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8,11 +9,9 @@ pub enum Object {
     Food(FoodType),
     Tool(ToolType),
     Material(MaterialType),
-    Valuable(ValuableType),
     Weapon(WeaponType),
     Clothing(ClothingType),
     Container(ContainerType),
-    Miscellaneous,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,7 +28,6 @@ pub enum ToolType {
     Shovel,
     Hammer,
     Saw,
-    Fishing,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,14 +41,7 @@ pub enum MaterialType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ValuableType {
-    Coin,
-    Gem,
-    Jewelry,
-    ArtObject,
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WeaponType {
     Sword,
     Bow,
@@ -83,16 +74,16 @@ pub enum ContainerType {
 }
 
 /// Effect that can be applied to entities and items
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Effect {
     /// Type of effect
     pub kind: EffectType,
     /// Severity level (generally 0-100)
     pub intensity: u32,
     /// Duration of the effect, None means permanent until removed
-    pub duration: Option<Duration>,
+    pub duration: Option<usize>,
     /// Time remaining for the effect
-    pub time_remaining: Option<Duration>,
+    pub time_remaining: Option<usize>,
 }
 
 /// All possible effect types in the world
@@ -130,8 +121,7 @@ pub enum EffectType {
     Skilled(Skill),
 
     // Inventory effects
-    Holding(Object),  // Holding an item
-    Equipped(Object), // Equipped with an item
+    Holding(ItemBox), // Holding an item
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,7 +131,7 @@ pub enum Skill {
 
 impl Effect {
     /// Create a new effect with specified parameters
-    pub fn new(kind: EffectType, intensity: u32, duration: Option<Duration>) -> Self {
+    pub fn new(kind: EffectType, intensity: u32, duration: Option<usize>) -> Self {
         Effect {
             kind,
             intensity,
@@ -155,31 +145,28 @@ impl Effect {
         Self::new(kind, intensity, None)
     }
 
-    /// Create a temporary effect with specified duration in seconds
-    pub fn temporary(kind: EffectType, intensity: u32, seconds: u64) -> Self {
-        Self::new(kind, intensity, Some(Duration::from_secs(seconds)))
+    /// Create a temporary effect with specified duration in ticks
+    pub fn temporary(kind: EffectType, intensity: u32, ticks: usize) -> Self {
+        Self::new(kind, intensity, Some(ticks))
     }
 
     /// Create a holding effect (carrying an item)
-    pub fn holding(item_type: Object) -> Self {
+    pub fn holding(item_type: ItemBox) -> Self {
         Self::permanent(EffectType::Holding(item_type.clone()), 100)
     }
 
     /// Create an equipped effect (wearing/using an item)
-    pub fn equipped(item_type: Object) -> Self {
-        Self::permanent(EffectType::Equipped(item_type.clone()), 100)
-    }
 
     /// Update the effect duration, returns true if the effect is still active
-    pub fn update(&mut self, delta: Duration) -> bool {
+    pub fn update(&mut self) -> bool {
         if let Some(remaining) = &mut self.time_remaining {
-            if *remaining <= delta {
+            if *remaining == 0 {
                 // Effect has expired
                 return false;
             }
 
             // Reduce the remaining time
-            *remaining -= delta;
+            *remaining -= 1;
         }
 
         // Effect is still active
@@ -189,7 +176,7 @@ impl Effect {
     /// Check if the effect is expired
     pub fn is_expired(&self) -> bool {
         if let Some(remaining) = self.time_remaining {
-            remaining.as_secs() == 0
+            remaining == 0
         } else {
             // Permanent effects never expire
             false
@@ -221,8 +208,7 @@ impl Effect {
             EffectType::Skilled(skill) => match skill {
                 Skill::Swimming => "Skilled in Swimming".to_string(),
             },
-            EffectType::Holding(item) => format!("Holding {}", item_type_to_string(item)),
-            EffectType::Equipped(item) => format!("Equipped with {}", item_type_to_string(item)),
+            EffectType::Holding(item) => format!("Holding {}", item),
         };
 
         let intensity_desc = match self.intensity {
@@ -234,7 +220,7 @@ impl Effect {
         };
 
         let duration_desc = if let Some(remaining) = self.time_remaining {
-            format!(" ({} seconds remaining)", remaining.as_secs())
+            format!(" ({} seconds remaining)", remaining)
         } else {
             "".to_string()
         };
@@ -275,7 +261,6 @@ fn item_type_to_string(item_type: &Object) -> String {
             ToolType::Shovel => "Shovel",
             ToolType::Hammer => "Hammer",
             ToolType::Saw => "Saw",
-            ToolType::Fishing => "Fishing Rod",
         },
         Object::Material(material_type) => match material_type {
             MaterialType::Wood => "Wood",
@@ -284,12 +269,6 @@ fn item_type_to_string(item_type: &Object) -> String {
             MaterialType::Cloth => "Cloth",
             MaterialType::Leather => "Leather",
             MaterialType::Gem => "Gem",
-        },
-        Object::Valuable(valuable_type) => match valuable_type {
-            ValuableType::Coin => "Coins",
-            ValuableType::Gem => "Gems",
-            ValuableType::Jewelry => "Jewelry",
-            ValuableType::ArtObject => "Art Object",
         },
         Object::Weapon(weapon_type) => match weapon_type {
             WeaponType::Sword => "Sword",
@@ -317,7 +296,6 @@ fn item_type_to_string(item_type: &Object) -> String {
             ContainerType::Barrel => "Barrel",
             ContainerType::Crate => "Crate",
         },
-        Object::Miscellaneous => "Miscellaneous Item",
     }
     .to_string()
 }
@@ -354,7 +332,6 @@ impl fmt::Display for EffectType {
                 Skill::Swimming => write!(f, "Skilled in Swimming"),
             },
             EffectType::Holding(item) => write!(f, "Holding {}", item),
-            EffectType::Equipped(item) => write!(f, "Equipped with {}", item),
         }
     }
 }

@@ -20,8 +20,6 @@ pub struct WorldGenParams {
     pub beach_level: f64,
     /// Controls how much the elevation changes
     pub elevation_amplitude: f64,
-    /// Controls how many mountain ranges are generated
-    pub mountain_frequency: f64,
     /// Controls how many rivers are attempted to be placed
     pub river_count: usize,
     /// Controls how wide rivers are
@@ -38,7 +36,6 @@ impl Default for WorldGenParams {
             sea_level: 0.38,
             beach_level: 0.42,
             elevation_amplitude: 1.2,
-            mountain_frequency: 0.6,
             river_count: 4,
             river_width: 1.3,
         }

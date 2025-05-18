@@ -5,9 +5,9 @@ mod world;
 use crate::world::World;
 use entity::effect::{
     ClothingType, ContainerType, Effect, EffectType, FoodType, MaterialType, Object, Skill,
-    ToolType, ValuableType, WeaponType,
+    ToolType, WeaponType,
 };
-use entity::item::{Item, ItemBox};
+use entity::item::Item;
 use pixels::Error;
 use render::{Renderer, TextRenderer};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,6 +33,8 @@ const TARGET_FPS: u64 = 30;
 // Base simulation speed
 const BASE_SIMULATION_SPEED: u64 = 25; // 100% speed
 static SIMULATION_SPEED: AtomicU64 = AtomicU64::new(BASE_SIMULATION_SPEED);
+
+const DEFAULT_HEALTH: u32 = 100;
 
 fn main() -> Result<(), Error> {
     // Set up the window and event loop
@@ -63,7 +65,7 @@ fn main() -> Result<(), Error> {
     }
 
     // Add some NPCs
-    add_npcs(&mut world, 3);
+    add_npcs(&mut world, 20);
 
     // add_animals(&mut world, 3);
 
@@ -278,10 +280,9 @@ fn add_npcs(world: &mut World, count: usize) {
                 let name = generate_name();
                 let traveler = Item::Traveler { name };
 
-                // Some travelers can swim (small chance)
                 let mut effects = vec![Effect::permanent(
                     EffectType::Healthy,
-                    100, // 100% health
+                    DEFAULT_HEALTH, // 100% health
                 )];
 
                 // Give a small percentage of travelers the ability to swim
@@ -295,54 +296,6 @@ fn add_npcs(world: &mut World, count: usize) {
 
                 world.add_item_with_effects(x, y, traveler, effects);
                 traveler_count += 1;
-            }
-        }
-
-        attempts += 1;
-    }
-}
-
-fn add_animals(world: &mut World, count: usize) {
-    let mut attempts = 0;
-    // Add animals to appropriate areas
-    let species = ["cow", "sheep", "bird"];
-    let mut animal_count = 0;
-
-    while animal_count < count / 2 && attempts < count * 10 {
-        let x = fastrand::usize(0..world.width());
-        let y = fastrand::usize(0..world.height());
-
-        // Check if this location is land (not water)
-        if let Some(stack) = world.get(x, y) {
-            let is_water = stack
-                .items()
-                .iter()
-                .any(|item_box| matches!(item_box.item, Item::Water | Item::DeepWater));
-
-            let is_grass = stack
-                .items()
-                .iter()
-                .any(|item_box| matches!(item_box.item, Item::Grass));
-
-            if !is_water && (is_grass || fastrand::bool()) {
-                let species = species[fastrand::usize(0..species.len())].to_string();
-
-                // Create animal with effects (health, swimming capabilities)
-                let mut effects = vec![Effect::permanent(
-                    EffectType::Healthy,
-                    80, // 80% health
-                )];
-
-                // Birds have a 30% chance to swim
-                if species == "bird" && fastrand::u8(0..100) < 30 {
-                    effects.push(Effect::permanent(
-                        EffectType::Skilled(Skill::Swimming), // Swimming ability
-                        100,
-                    ));
-                }
-
-                world.add_item_with_effects(x, y, Item::Animal { species }, effects);
-                animal_count += 1;
             }
         }
 

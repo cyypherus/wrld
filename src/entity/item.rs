@@ -1,9 +1,12 @@
-use crate::entity::effect::{
-    ClothingType, ContainerType, Effect, EffectType, FoodType, MaterialType, Object, ToolType,
-    ValuableType, WeaponType,
+use crate::{
+    entity::effect::{
+        ClothingType, ContainerType, Effect, EffectType, FoodType, MaterialType, Object, ToolType,
+        WeaponType,
+    },
+    world::world::ItemStack,
 };
+
 use std::fmt::Debug;
-use std::time::Duration;
 
 /// Color representation using RGBA format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,34 +73,37 @@ pub enum Action {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interaction {
-    UseItem,
     PickUp,
     Drop,
     Consume,
-    Trade,
-    CombineItems,
-}
-
-/// Result of an interaction between items
-#[derive(Debug, Clone)]
-pub struct InteractionResult {
-    /// Whether the interaction was successful
-    pub success: bool,
-    /// Effect produced by the interaction
-    pub effect: Option<Effect>,
-    /// New item created by the interaction (if any)
-    pub new_item: Option<ItemBox>,
-    /// Message describing the interaction result
-    pub message: String,
 }
 
 /// Container for item data with common properties
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemBox {
     /// The specific item type
     pub item: Item,
     /// Effects applied to this item
     pub effects: Vec<Effect>,
+}
+
+impl std::fmt::Display for ItemBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let base_name = self.item.to_string();
+
+        if self.effects.is_empty() {
+            write!(f, "{}", base_name)
+        } else {
+            let effects_str = self
+                .effects
+                .iter()
+                .map(|e| e.kind.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            write!(f, "{} [{}]", base_name, effects_str)
+        }
+    }
 }
 
 impl ItemBox {
@@ -113,16 +119,18 @@ impl ItemBox {
     pub fn with_effects(item: Item, effects: Vec<Effect>) -> Self {
         Self { item, effects }
     }
+
+    pub fn heal(&mut self, health_boost: u32) {
+        if let Some(healing_effect) = self
+            .effects
+            .iter_mut()
+            .find(|e| matches!(e.kind, EffectType::Healthy))
+        {
+            healing_effect.intensity += health_boost;
+        }
+    }
 }
 
-/// Property values for flexible item properties
-#[derive(Debug, Clone)]
-pub enum PropertyValue {
-    Number(f64),
-    Text(String),
-    Boolean(bool),
-    List(Vec<PropertyValue>),
-}
 /// All possible items in the world
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
@@ -140,7 +148,6 @@ pub enum Item {
 
     // Entities
     Traveler { name: String },
-    Animal { species: String },
     Corpse { name: String, item_type: CorpseType },
 
     // Town structures
@@ -153,6 +160,96 @@ pub enum Item {
     Road { connected: bool },
     Bridge,
     Object(Object),
+}
+
+impl std::fmt::Display for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Item::Air => write!(f, "Air"),
+            Item::Dirt => write!(f, "Dirt"),
+            Item::Grass => write!(f, "Grass"),
+            Item::Water => write!(f, "Water"),
+            Item::DeepWater => write!(f, "Deep Water"),
+            Item::Sand => write!(f, "Sand"),
+            Item::Log => write!(f, "Log"),
+            Item::Rock => write!(f, "Rock"),
+            Item::Mountain => write!(f, "Mountain"),
+            Item::Snow => write!(f, "Snow"),
+            Item::Traveler { name } => write!(f, "Traveler ({})", name),
+
+            Item::Corpse { name, item_type } => match item_type {
+                CorpseType::Traveler => write!(f, "Corpse of {} (Traveler)", name),
+                CorpseType::Animal(species) => write!(f, "Corpse of {} ({})", name, species),
+            },
+            Item::House { owner } => match owner {
+                Some(name) => write!(f, "{}'s House", name),
+                None => write!(f, "Empty House"),
+            },
+            Item::Shop { shop_type } => write!(f, "{} Shop", shop_type),
+            Item::Tavern { name } => write!(f, "Tavern '{}'", name),
+            Item::Temple { deity } => write!(f, "Temple of {}", deity),
+            Item::Road { connected } => {
+                if *connected {
+                    write!(f, "Road (connected)")
+                } else {
+                    write!(f, "Road (path)")
+                }
+            }
+            Item::Bridge => write!(f, "Bridge"),
+            Item::Object(obj) => write!(
+                f,
+                "{}",
+                match obj {
+                    Object::Food(food_type) => match food_type {
+                        FoodType::Bread => "Bread",
+                        FoodType::Fruit => "Fruit",
+                        FoodType::Vegetable => "Vegetable",
+                    },
+                    Object::Tool(tool_type) => match tool_type {
+                        ToolType::Axe => "Axe",
+                        ToolType::Pickaxe => "Pickaxe",
+                        ToolType::Shovel => "Shovel",
+                        ToolType::Hammer => "Hammer",
+                        ToolType::Saw => "Saw",
+                    },
+                    Object::Material(material_type) => match material_type {
+                        MaterialType::Wood => "Wood",
+                        MaterialType::Stone => "Stone",
+                        MaterialType::Metal => "Metal",
+                        MaterialType::Cloth => "Cloth",
+                        MaterialType::Leather => "Leather",
+                        MaterialType::Gem => "Gem",
+                    },
+                    Object::Weapon(weapon_type) => match weapon_type {
+                        WeaponType::Sword => "Sword",
+                        WeaponType::Bow => "Bow",
+                        WeaponType::Axe => "Battle Axe",
+                        WeaponType::Dagger => "Dagger",
+                        WeaponType::Staff => "Staff",
+                        WeaponType::Spear => "Spear",
+                        WeaponType::Shield => "Shield",
+                    },
+                    Object::Clothing(clothing_type) => match clothing_type {
+                        ClothingType::Shirt => "Shirt",
+                        ClothingType::Pants => "Pants",
+                        ClothingType::Boots => "Boots",
+                        ClothingType::Gloves => "Gloves",
+                        ClothingType::Hat => "Hat",
+                        ClothingType::Cloak => "Cloak",
+                        ClothingType::Armor => "Armor",
+                    },
+                    Object::Container(container_type) => match container_type {
+                        ContainerType::Bag => "Bag",
+                        ContainerType::Chest => "Chest",
+                        ContainerType::Bottle => "Bottle",
+                        ContainerType::Pouch => "Pouch",
+                        ContainerType::Barrel => "Barrel",
+                        ContainerType::Crate => "Crate",
+                    },
+                }
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,12 +273,6 @@ impl ItemBox {
             Item::Mountain => 'M',
             Item::Snow => '*',
             Item::Traveler { .. } => '@',
-            Item::Animal { species, .. } => match species.as_str() {
-                "cow" => 'c',
-                "sheep" => 's',
-                "bird" => 'b',
-                _ => 'a',
-            },
             Item::Corpse { .. } => '%',
             Item::House { .. } => 'H',
             Item::Shop { .. } => 'S',
@@ -193,11 +284,10 @@ impl ItemBox {
                 Object::Food(_) => 'f',
                 Object::Tool(_) => 't',
                 Object::Material(_) => 'm',
-                Object::Valuable(_) => '$',
+
                 Object::Weapon(_) => 'w',
                 Object::Clothing(_) => 'c',
                 Object::Container(_) => 'C',
-                Object::Miscellaneous => '?',
             },
         }
     }
@@ -216,7 +306,7 @@ impl ItemBox {
             Item::Mountain => Color::MOUNTAIN_COLOR,
             Item::Snow => Color::SNOW_COLOR,
             Item::Traveler { .. } => Color::TRAVELER_COLOR,
-            Item::Animal { .. } => Color::ANIMAL_COLOR,
+
             Item::Corpse { .. } => Color::new(120, 40, 40, 255), // Dark red
             Item::House { .. } => Color::HOUSE_COLOR,
             Item::Shop { .. } => Color::SHOP_COLOR,
@@ -228,11 +318,9 @@ impl ItemBox {
                 Object::Food(_) => Color::new(210, 105, 30, 255), // Brown
                 Object::Tool(_) => Color::new(169, 169, 169, 255), // Silver
                 Object::Material(_) => Color::new(139, 69, 19, 255), // Saddle brown
-                Object::Valuable(_) => Color::new(255, 215, 0, 255), // Gold
                 Object::Weapon(_) => Color::new(192, 192, 192, 255), // Silver
                 Object::Clothing(_) => Color::new(240, 248, 255, 255), // Alice blue
                 Object::Container(_) => Color::new(160, 82, 45, 255), // Sienna
-                Object::Miscellaneous => Color::new(128, 128, 128, 255), // Gray
             },
         }
     }
@@ -254,9 +342,7 @@ impl ItemBox {
             Item::Traveler { name } => {
                 format!("Traveler ({})", name)
             }
-            Item::Animal { species } => {
-                format!("Animal ({})", species)
-            }
+
             Item::Corpse { name, item_type } => match item_type {
                 CorpseType::Traveler => format!("Corpse of {} (Traveler)", name),
                 CorpseType::Animal(species) => format!("Corpse of {} ({})", name, species),
@@ -290,7 +376,6 @@ impl ItemBox {
                         ToolType::Shovel => "Shovel",
                         ToolType::Hammer => "Hammer",
                         ToolType::Saw => "Saw",
-                        ToolType::Fishing => "Fishing Rod",
                     },
                     Object::Material(material_type) => match material_type {
                         MaterialType::Wood => "Wood",
@@ -299,12 +384,6 @@ impl ItemBox {
                         MaterialType::Cloth => "Cloth",
                         MaterialType::Leather => "Leather",
                         MaterialType::Gem => "Gem",
-                    },
-                    Object::Valuable(valuable_type) => match valuable_type {
-                        ValuableType::Coin => "Coins",
-                        ValuableType::Gem => "Gems",
-                        ValuableType::Jewelry => "Jewelry",
-                        ValuableType::ArtObject => "Art Object",
                     },
                     Object::Weapon(weapon_type) => match weapon_type {
                         WeaponType::Sword => "Sword",
@@ -332,7 +411,6 @@ impl ItemBox {
                         ContainerType::Barrel => "Barrel",
                         ContainerType::Crate => "Crate",
                     },
-                    Object::Miscellaneous => "Miscellaneous Item",
                 }
                 .to_string();
 
@@ -368,7 +446,7 @@ impl ItemBox {
             Item::Mountain => true,
             Item::Snow => false,
             Item::Traveler { .. } => false,
-            Item::Animal { .. } => false,
+
             Item::Corpse { .. } => true,
             Item::House { .. } => true,
             Item::Shop { .. } => true,
@@ -383,7 +461,7 @@ impl ItemBox {
     /// Whether this item can act (NPCs, players, etc)
     pub fn can_act(&self) -> bool {
         match &self.item {
-            Item::Traveler { .. } | Item::Animal { .. } => {
+            Item::Traveler { .. } => {
                 // Only alive entities can act - check if they have a Dead effect
                 !self
                     .effects
@@ -394,73 +472,28 @@ impl ItemBox {
         }
     }
 
-    /// Check if this item can traverse water
-    pub fn can_traverse_water(&self) -> bool {
-        match &self.item {
-            Item::Traveler { .. } => false, // Travelers can't swim by default
-            Item::Animal { species, .. } => {
-                // Some animals can swim by default
-                match species.as_str() {
-                    "fish" => true,
-                    "duck" => true,
-                    "frog" => true,
-                    _ => false,
-                }
-            }
-            _ => false,
-        }
-    }
-
-    /// Get the inherent effects of this item type (not including applied effects)
-    pub fn get_inherent_effects(&self) -> Vec<Effect> {
-        match &self.item {
-            Item::Water => vec![Effect::new(
-                EffectType::Wet,
-                50,
-                Some(Duration::from_secs(60)),
-            )],
-            Item::DeepWater => vec![Effect::new(
-                EffectType::Wet,
-                90,
-                Some(Duration::from_secs(120)),
-            )],
-            Item::Object(Object::Food(_)) => vec![Effect::new(
-                EffectType::Hungry,
-                100,
-                Some(Duration::from_secs(3600)), // 1 hour
-            )],
-            _ => vec![],
-        }
-    }
-
     /// Process interactions between two items
     /// Process interactions between items
     pub fn process_interaction(
         actor: &mut ItemBox,
-        target: &ItemBox,
+        target: &mut ItemStack,
+        z: usize,
         interaction: Interaction,
     ) -> (bool, String) {
+        let item = &target.items()[z].clone();
         // Process the interaction based on type
         match interaction {
             Interaction::Consume => {
-                dbg!("*******************");
-                dbg!(target);
                 // Handle consuming an item (like eating food)
                 // Check if the consumer is attempting to eat a corpse
-                if let Item::Corpse { name, item_type } = &target.item {
+                if let Item::Corpse { name, item_type } = &item.item {
                     // Consume the corpse for a mix of health, hunger, and thirst benefits
                     let (health_boost, hunger_reduction, thirst_reduction) = match item_type {
                         CorpseType::Traveler => (10, 80, 10), // Consuming a traveler is less healthy but very filling
                         CorpseType::Animal(_) => (30, 60, 20), // Animal corpses provide more nutrition
                     };
 
-                    // Create healing effect and apply it
-                    let healing_effect = Effect::temporary(
-                        EffectType::Healthy,
-                        health_boost,
-                        600, // 10 minutes
-                    );
-                    actor.effects.push(healing_effect);
+                    actor.heal(health_boost);
 
                     // Get current hunger level
                     let current_hunger = actor
@@ -520,20 +553,15 @@ impl ItemBox {
                             name, health_boost
                         ),
                     );
-                } else if let Item::Traveler { name } = &target.item {
+                } else if let Item::Traveler { name } = &item.item {
                     // We're trying to consume a living traveler! This is only possible if they're dead
-                    if target
+                    if item
                         .effects
                         .iter()
                         .any(|effect| matches!(effect.kind, EffectType::Dead))
                     {
                         // They're dead, consume them for nutrition
-                        let healing_effect = Effect::temporary(
-                            EffectType::Healthy,
-                            10,  // Not very healthy
-                            600, // 10 minutes
-                        );
-                        actor.effects.push(healing_effect);
+                        actor.heal(10);
 
                         // Reduce hunger significantly
                         let current_hunger = actor
@@ -565,65 +593,14 @@ impl ItemBox {
                             format!("Cannot consume {} - they are still alive!", name),
                         );
                     }
-                } else if let Item::Animal { species } = &target.item {
-                    // We're trying to consume a living animal! This is only possible if they're dead
-                    if target
-                        .effects
-                        .iter()
-                        .any(|effect| matches!(effect.kind, EffectType::Dead))
-                    {
-                        // They're dead, consume them for nutrition
-                        let healing_effect = Effect::temporary(
-                            EffectType::Healthy,
-                            30,  // Animals provide better nutrition
-                            600, // 10 minutes
-                        );
-                        actor.effects.push(healing_effect);
-
-                        // Reduce hunger significantly
-                        let current_hunger = actor
-                            .effects
-                            .iter()
-                            .find(|e| matches!(e.kind, EffectType::Hungry))
-                            .map_or(100, |e| e.intensity);
-
-                        // Reduce hunger
-                        let new_hunger = current_hunger.saturating_sub(60);
-
-                        // Update hunger effect
-                        if let Some(idx) = actor
-                            .effects
-                            .iter()
-                            .position(|e| matches!(e.kind, EffectType::Hungry))
-                        {
-                            actor.effects[idx] = Effect::permanent(EffectType::Hungry, new_hunger);
-                        } else {
-                            actor
-                                .effects
-                                .push(Effect::permanent(EffectType::Hungry, new_hunger));
-                        }
-
-                        return (true, format!("Consumed {} who was dead", species));
-                    } else {
-                        return (
-                            false,
-                            format!("Cannot consume {} - it is still alive!", species),
-                        );
-                    }
-                } else if let Item::Object(Object::Food(food_type)) = &target.item {
+                } else if let Item::Object(Object::Food(food_type)) = &item.item {
                     let (health_boost, hunger_reduction, thirst_reduction) = match food_type {
                         FoodType::Bread => (40, 60, 10),
                         FoodType::Fruit => (30, 40, 20),
                         FoodType::Vegetable => (30, 50, 15),
                     };
 
-                    // Create healing effect and apply it
-                    let healing_effect = Effect::temporary(
-                        EffectType::Healthy,
-                        health_boost,
-                        600, // 10 minutes
-                    );
-                    actor.effects.push(healing_effect);
+                    actor.heal(health_boost);
 
                     // Get current hunger level
                     let current_hunger = actor
@@ -680,7 +657,7 @@ impl ItemBox {
                         true,
                         format!(
                             "Consumed {} and gained {}% health, reduced hunger by {}%, thirst by {}%",
-                            target.get_name(),
+                            item.get_name(),
                             health_boost,
                             hunger_reduction,
                             thirst_reduction
@@ -689,7 +666,7 @@ impl ItemBox {
                 }
 
                 // Handle drinking water
-                if matches!(target.item, Item::Water | Item::DeepWater) {
+                if matches!(item.item, Item::Water | Item::DeepWater) {
                     // Get current thirst level
                     let current_thirst = actor
                         .effects
@@ -721,34 +698,38 @@ impl ItemBox {
                 // Default consumption result
                 (false, "Cannot consume this item".to_string())
             }
+            Interaction::Drop => {
+                let index = actor
+                    .effects
+                    .iter()
+                    .position(|e| matches!(e.kind, EffectType::Holding(_)));
+                if let Some(i) = index {
+                    if let EffectType::Holding(dropped) = actor.effects.remove(i).kind {
+                        let name = dropped.get_name();
+                        target.push(dropped);
+                        return (true, format!("Dropped {}", name));
+                    }
+                }
+                return (false, "No item to drop".to_string());
+            }
             Interaction::PickUp => {
                 // Handle picking up an item
-                match &target.item {
-                    Item::Object(object) => {
+                match &item.item {
+                    Item::Object(_) => {
                         // Add holding effect to actor
                         actor
                             .effects
-                            .push(Effect::permanent(EffectType::Holding(object.clone()), 100));
+                            .push(Effect::permanent(EffectType::Holding(item.clone()), 100));
 
-                        return (true, format!("Picked up {}", target.get_name()));
+                        target.pop();
+                        (true, format!("Picked up {}", item.get_name()))
                     }
                     Item::Corpse { name, .. } => {
                         // Pick up corpse (we could add a special effect for carrying corpses)
-                        return (true, format!("Picked up corpse of {}", name));
+                        (true, format!("Picked up corpse of {}", name))
                     }
-                    _ => {
-                        return (false, "No item to pick up".to_string());
-                    }
+                    _ => (false, "No item to pick up".to_string()),
                 }
-            }
-            Interaction::Trade => {
-                // Handle trading items between entities
-                // Trading logic would go here
-
-                return (true, "Traded items".to_string());
-            }
-            _ => {
-                return (false, "Unsupported action".to_string());
             }
         }
     }
