@@ -225,12 +225,12 @@ impl World {
             elevation_scale: 0.06,    // Lower scale for larger features
             moisture_scale: 0.05,     // Lower scale for moisture patterns
             vegetation_scale: 0.12,   // Lower scale for vegetation patterns
-            sea_level: 0.42,          // Higher sea level for more islands
-            beach_level: 0.46,        // Adjusted beach level
+            sea_level: 0.22,          // Higher sea level for more islands
+            beach_level: 0.26,        // Adjusted beach level
             elevation_amplitude: 1.3, // Higher amplitude for more dramatic terrain
 
-            river_count: 5,   // More rivers
-            river_width: 1.2, // Slightly thinner rivers
+            river_count: 15, // More rivers
+            river_width: 1., // Slightly thinner rivers
         };
 
         // Create generator with custom parameters
@@ -532,36 +532,36 @@ impl World {
                     Item::Bridge => 1,
 
                     // Land is preferred for walking
-                    Item::Dirt => 5,
-                    Item::Grass => 5,
-                    Item::Sand => 5,
+                    Item::Dirt => 10,
+                    Item::Grass => 10,
+                    Item::Sand => 10,
 
                     // Obstacles are much harder to traverse
-                    Item::Log => 8,
-                    Item::Rock => 10,
-                    Item::Mountain => 25,
+                    Item::Log => 13,
+                    Item::Rock => 15,
+                    Item::Mountain => 30,
 
                     // Water is difficult - travelers prefer to avoid it
-                    Item::Water => 15,
-                    Item::DeepWater => 60, // Almost impassable
+                    Item::Water => 20,
+                    Item::DeepWater => 65, // Almost impassable
 
                     // Snow is slow but easier than water
-                    Item::Snow => 7,
+                    Item::Snow => 12,
 
                     // Buildings are traversable but not preferred paths
-                    Item::House { .. } => 5,
-                    Item::Shop { .. } => 5,
-                    Item::Tavern { .. } => 5,
-                    Item::Temple { .. } => 5,
+                    Item::House { .. } => 10,
+                    Item::Shop { .. } => 10,
+                    Item::Tavern { .. } => 10,
+                    Item::Temple { .. } => 10,
 
                     // Objects should be easy to navigate around or pick up
-                    Item::Object(_) => 2,
+                    Item::Object(_) => 7,
 
                     // Default cost for other terrain types
-                    _ => 3,
+                    _ => 10,
                 }
             } else {
-                3 // Default cost
+                10 // Default cost
             }
         } else {
             99 // Very high cost for invalid positions
@@ -908,6 +908,7 @@ impl World {
                     return action;
                 }
 
+                // Drop babies
                 if !item_box.tired()
                     && item_box.effects.iter().any(|e| {
                         matches!(

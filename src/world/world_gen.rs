@@ -26,22 +26,6 @@ pub struct WorldGenParams {
     pub river_width: f64,
 }
 
-impl Default for WorldGenParams {
-    fn default() -> Self {
-        WorldGenParams {
-            seed: 0,
-            elevation_scale: 0.08,
-            moisture_scale: 0.06,
-            vegetation_scale: 0.15,
-            sea_level: 0.38,
-            beach_level: 0.42,
-            elevation_amplitude: 1.2,
-            river_count: 4,
-            river_width: 1.3,
-        }
-    }
-}
-
 /// A complete world generator that uses multiple noise functions to create realistic terrain
 pub struct WorldGenerator {
     params: WorldGenParams,
@@ -53,21 +37,6 @@ pub struct WorldGenerator {
 }
 
 impl WorldGenerator {
-    /// Create a new world generator with the given seed
-    pub fn new(seed: u64) -> Self {
-        WorldGenerator {
-            params: WorldGenParams {
-                seed,
-                ..WorldGenParams::default()
-            },
-            elevation_noise: Perlin::new(seed as u32),
-            moisture_noise: Perlin::new((seed.wrapping_add(1)) as u32),
-            vegetation_noise: Perlin::new((seed.wrapping_add(2)) as u32),
-            feature_noise: Perlin::new((seed.wrapping_add(3)) as u32),
-            rng: ChaCha8Rng::seed_from_u64(seed),
-        }
-    }
-
     /// Create a new world generator with custom parameters
     pub fn with_params(params: WorldGenParams) -> Self {
         let seed = params.seed;
@@ -168,14 +137,14 @@ impl WorldGenerator {
                     if self.feature_noise.get([nx * 3.0, ny * 3.0]) > 0.85 {
                         stack.push(ItemBox::new(Item::Rock));
                     }
-                } else if elevation > 0.85 {
+                } else if elevation > 0.9 {
                     // Mountain peaks with snow
                     stack.push(ItemBox::new(Item::Mountain));
                     stack.push(ItemBox::new(Item::Snow));
-                } else if elevation > 0.75 {
+                } else if elevation > 0.80 {
                     // Mountain areas
                     stack.push(ItemBox::new(Item::Mountain));
-                } else if elevation > 0.65 {
+                } else if elevation > 0.70 {
                     // Rocky elevated areas
                     stack.push(ItemBox::new(Item::Rock));
                 } else {
@@ -225,7 +194,7 @@ impl WorldGenerator {
         }
 
         // Sort by elevation descending
-        potential_sources.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+        potential_sources.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
 
         // Limit to the desired number of rivers
         let river_count = self.params.river_count.min(potential_sources.len());

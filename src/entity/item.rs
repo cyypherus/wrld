@@ -702,7 +702,9 @@ impl ItemBox {
                     actor.heal(item.nutrition().0);
                     actor.eat(item.nutrition().1);
                     actor.drink(item.nutrition().2);
-                    target.items.remove(z);
+                    if !matches!(item.item, Item::Water | Item::DeepWater) {
+                        target.items.remove(z);
+                    }
 
                     return (
                         true,
