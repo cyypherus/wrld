@@ -1,3 +1,5 @@
+use std::cell;
+
 use crate::entity::item::{Color, Item};
 use crate::world::World;
 use pixels::{Pixels, SurfaceTexture};
@@ -32,9 +34,9 @@ impl Renderer {
     }
 
     /// Update hover position based on mouse coordinates
-    pub fn update_hover(&mut self, position: PhysicalPosition<f64>, world: &World) {
-        let x = (position.x / self.cell_size as f64) as usize;
-        let y = (position.y / self.cell_size as f64) as usize;
+    pub fn update_hover(&mut self, position: (f32, f32), world: &World) {
+        let x = (position.0 / self.cell_size as f32) as usize;
+        let y = (position.1 / self.cell_size as f32) as usize;
 
         // Check if position is within world bounds
         if x < world.width() && y < world.height() {

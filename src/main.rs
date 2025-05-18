@@ -13,6 +13,7 @@ use render::{Renderer, TextRenderer};
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+use winit::dpi::LogicalPosition;
 use winit::{
     dpi::{LogicalSize, PhysicalPosition},
     event::{Event, VirtualKeyCode, WindowEvent},
@@ -55,6 +56,10 @@ fn main() -> Result<(), Error> {
         .build(&event_loop)
         .unwrap();
 
+    // Get the initial DPI scaling factor
+    let hidpi_factor = window.scale_factor();
+    println!("Initial DPI scaling factor: {}", hidpi_factor);
+
     // Set up input handling
     let mut input = WinitInputHelper::new();
 
@@ -88,6 +93,9 @@ fn main() -> Result<(), Error> {
     // Track mouse position for hover information
     let mut mouse_position = None;
     let mut show_info = false;
+
+    // Track DPI scaling factor
+    let mut dpi_factor = hidpi_factor;
 
     // Simulation state
     let mut paused = false;
@@ -154,6 +162,10 @@ fn main() -> Result<(), Error> {
 
             // Handle window resizing
             if let Some(size) = input.window_resized() {
+                // Update DPI factor on resize as it might have changed
+                dpi_factor = window.scale_factor();
+                println!("Updated DPI scaling factor: {}", dpi_factor);
+
                 if let Err(e) = renderer.resize_surface(size.width, size.height) {
                     eprintln!("Error resizing surface: {}", e);
                     *control_flow = ControlFlow::Exit;
@@ -164,11 +176,15 @@ fn main() -> Result<(), Error> {
 
             // Track mouse position
             if let Some(position) = input.mouse() {
-                mouse_position = Some(position);
+                // Convert to logical position first
+                let logical_position = LogicalPosition::new(position.0 as f64, position.1 as f64);
+                let pos = (
+                    (logical_position.x / dpi_factor) as f32,
+                    (logical_position.y / dpi_factor) as f32,
+                );
+                mouse_position = Some(pos);
 
-                // Update hover information
-                let physical_position = PhysicalPosition::new(position.0 as f64, position.1 as f64);
-                renderer.update_hover(physical_position, &world);
+                renderer.update_hover(pos, &world);
 
                 // Request a redraw immediately when hover changes
                 window.request_redraw();
