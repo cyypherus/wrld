@@ -131,6 +131,8 @@ impl Renderer {
                                 // Enhanced effect description with intensity and duration
                                 let mut effect_desc = "         ".to_string();
 
+                                effect_desc.push_str(&format!("{}", effect.kind));
+
                                 // Add effect description based on type
                                 match &effect.kind {
                                     crate::entity::effect::EffectType::Healthy => {
@@ -202,6 +204,15 @@ impl Renderer {
                                     ) => {
                                         effect_desc
                                             .push_str(&format!(" - Prefers moving {}", direction));
+                                    }
+                                    crate::entity::effect::EffectType::Thinking(thought) => {
+                                        effect_desc.push_str(&format!(" - Thinking {}", thought));
+                                    }
+                                    crate::entity::effect::EffectType::Tired => {
+                                        effect_desc.push_str(" - Tired");
+                                    }
+                                    crate::entity::effect::EffectType::Young => {
+                                        effect_desc.push_str(" - Young");
                                     }
                                 }
 

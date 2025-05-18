@@ -1,8 +1,9 @@
 use crate::{
     entity::effect::{
-        ClothingType, ContainerType, Effect, EffectType, FoodType, MaterialType, Object, ToolType,
-        WeaponType,
+        self, ClothingType, ContainerType, Effect, EffectType, FoodType, MaterialType, Object,
+        ToolType, WeaponType,
     },
+    generate_name,
     world::world::ItemStack,
 };
 
@@ -196,6 +197,15 @@ impl ItemBox {
         }
         0
     }
+    pub fn tired(&self) -> bool {
+        self.effects
+            .iter()
+            .any(|e| matches!(e.kind, EffectType::Tired))
+    }
+    pub fn make_tired(&mut self) {
+        self.effects
+            .push(Effect::new(EffectType::Tired, 100, Some(100)));
+    }
     pub fn drink(&mut self, amount: i32) {
         if let Some(thirst) = self
             .effects
@@ -209,6 +219,21 @@ impl ItemBox {
             }
         }
     }
+    pub fn think(&mut self, thought: String) {
+        if let Some(Effect {
+            kind: EffectType::Thinking(existing_thought),
+            ..
+        }) = self
+            .effects
+            .iter_mut()
+            .find(|e| matches!(e.kind, EffectType::Thinking(_)))
+        {
+            *existing_thought = thought;
+        } else {
+            self.effects
+                .push(Effect::new(EffectType::Thinking(thought), 10, Some(10)));
+        }
+    }
     pub fn quench(&mut self) {
         if let Some(thirst) = self
             .effects
@@ -217,6 +242,11 @@ impl ItemBox {
         {
             thirst.intensity = 0;
         }
+    }
+    pub fn young(&self) -> bool {
+        self.effects
+            .iter()
+            .any(|e| matches!(e.kind, EffectType::Young))
     }
     /// health, hunger, thirst
     pub fn nutrition(&self) -> (i32, i32, i32) {
@@ -273,7 +303,7 @@ impl ItemBox {
                 EffectType::Thirsty => {
                     thirst_level = effect.intensity;
                 }
-                EffectType::Injured | _ => {}
+                _ => {}
             }
         }
 
@@ -299,6 +329,8 @@ impl ItemBox {
 // Define priority levels for decision making
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Priority {
+    None,
+    Liesure,
     Low,      // General collection/exploration
     Normal,   // Thirst/Hunger > 30%
     Urgent,   // Thirst/Hunger > 50%
@@ -675,9 +707,11 @@ impl ItemBox {
                     return (
                         true,
                         format!(
-                            "Consumed {} and gained {}% health",
+                            "Consumed {} and gained {}% health, {}% hunger, {}% thirst",
                             item.get_name(),
-                            item.nutrition().1
+                            item.nutrition().0,
+                            item.nutrition().1,
+                            item.nutrition().2
                         ),
                     );
                 }
@@ -719,7 +753,10 @@ impl ItemBox {
                     let Item::Traveler { name: actor_name } = &item.item else {
                         return (false, "No item to mate".to_string());
                     };
-                    let baby_name = format!("{}Jr", actor_name);
+                    if actor.tired() || item.tired() {
+                        return (false, "Actor is too tired to mate".to_string());
+                    }
+                    let baby_name = format!("{} {}", generate_name(), mate_name);
 
                     // Create the baby
                     let baby = Item::Traveler {
@@ -729,6 +766,7 @@ impl ItemBox {
                         Effect::permanent(EffectType::Healthy, 100),
                         Effect::permanent(EffectType::Hungry, 30),
                         Effect::permanent(EffectType::Thirsty, 30),
+                        Effect::temporary(EffectType::Young, 100, 50),
                     ];
                     actor.effects.push(Effect::permanent(
                         EffectType::Holding(ItemBox {
@@ -737,6 +775,7 @@ impl ItemBox {
                         }),
                         100,
                     ));
+                    actor.make_tired();
                     println!(
                         "A new traveler {} was born to {} and {}",
                         baby_name, actor_name, mate_name
@@ -746,7 +785,7 @@ impl ItemBox {
                         format!("Successfully created a baby traveler named {}", baby_name),
                     )
                 }
-                _ => (false, "No item to pick up".to_string()),
+                _ => (false, "Unable to mate with that".to_string()),
             },
         }
     }

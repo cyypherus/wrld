@@ -84,8 +84,6 @@ pub struct Effect {
     pub intensity: u32,
     /// Duration of the effect, None means permanent until removed
     pub duration: Option<usize>,
-    /// Time remaining for the effect
-    pub time_remaining: Option<usize>,
 }
 
 /// All possible effect types in the world
@@ -106,6 +104,11 @@ pub enum EffectType {
     Holding(ItemBox), // Holding an item
 
     PreferredDirection(Direction),
+
+    Thinking(String),
+
+    Tired,
+    Young,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,7 +123,6 @@ impl Effect {
             kind,
             intensity,
             duration,
-            time_remaining: duration,
         }
     }
 
@@ -141,7 +143,7 @@ impl Effect {
 
     /// Update the effect duration, returns true if the effect is still active
     pub fn update(&mut self) -> bool {
-        if let Some(remaining) = &mut self.time_remaining {
+        if let Some(remaining) = &mut self.duration {
             if *remaining == 0 {
                 // Effect has expired
                 return false;
@@ -157,7 +159,7 @@ impl Effect {
 
     /// Check if the effect is expired
     pub fn is_expired(&self) -> bool {
-        if let Some(remaining) = self.time_remaining {
+        if let Some(remaining) = self.duration {
             remaining == 0
         } else {
             // Permanent effects never expire
@@ -237,8 +239,17 @@ impl fmt::Display for EffectType {
                 Skill::Swimming => write!(f, "Skilled in Swimming"),
             },
             EffectType::Holding(item) => write!(f, "Holding {}", item),
-            EffectType::PreferredDirection(direction) => {
-                write!(f, "Preferred Direction {}", direction)
+            EffectType::PreferredDirection(_) => {
+                write!(f, "Preferred Direction")
+            }
+            EffectType::Thinking(_) => {
+                write!(f, "Thinking")
+            }
+            EffectType::Tired => {
+                write!(f, "Tired")
+            }
+            EffectType::Young => {
+                write!(f, "Young")
             }
         }
     }

@@ -43,6 +43,7 @@ const VIEW_MODE_ITEMS: u8 = 3;
 static VIEW_MODE: AtomicU8 = AtomicU8::new(VIEW_MODE_ALL);
 
 const DEFAULT_HEALTH: u32 = 100;
+const FOOD_SPAWN_RATE: u8 = 50;
 
 fn main() -> Result<(), Error> {
     // Set up the window and event loop
@@ -168,7 +169,6 @@ fn main() -> Result<(), Error> {
                 // Update hover information
                 let physical_position = PhysicalPosition::new(position.0 as f64, position.1 as f64);
                 renderer.update_hover(physical_position, &world);
-                show_info = true;
 
                 // Request a redraw immediately when hover changes
                 window.request_redraw();
@@ -239,15 +239,39 @@ fn main() -> Result<(), Error> {
                 if show_info && mouse_position.is_some() {
                     // Get the hover info and render it
                     if let Some(hover_info) = renderer.get_hover_info() {
-                        // Draw text info at mouse position - offset to avoid mouse cursor covering it
-                        let x = mouse_position.unwrap().0 as usize + 15;
-                        let y = mouse_position.unwrap().1 as usize + 15;
+                        // Calculate text dimensions
+                        let lines: Vec<&str> = hover_info.lines().collect();
+                        let line_count = lines.len();
+                        let longest_line = lines.iter().map(|line| line.len()).max().unwrap_or(0);
 
-                        // Make sure text doesn't go off screen
-                        let max_x = WINDOW_WIDTH as usize - 100;
-                        let max_y = WINDOW_HEIGHT as usize - 100;
-                        let safe_x = x.min(max_x);
-                        let safe_y = y.min(max_y);
+                        // Estimate text box dimensions (based on font size in TextRenderer)
+                        let char_width = 6;
+                        let char_height = 10;
+                        let line_spacing = 2;
+                        let padding = 0;
+                        let text_width = longest_line * char_width + padding * 2;
+                        let text_height = line_count * (char_height + line_spacing) + padding * 2;
+
+                        // Get mouse position
+                        let mouse_x = mouse_position.unwrap().0 as usize;
+                        let mouse_y = mouse_position.unwrap().1 as usize;
+
+                        // Initial position (offset from cursor)
+                        let mut x = mouse_x + 15;
+                        let mut y = mouse_y + 15;
+
+                        // Adjust if text would go off-screen
+                        if x + text_width > WINDOW_WIDTH as usize {
+                            x = mouse_x.saturating_sub(text_width + 15);
+                        }
+
+                        if y + text_height > WINDOW_HEIGHT as usize {
+                            y = mouse_y.saturating_sub(text_height + 15);
+                        }
+
+                        // Final safety clamp to ensure we're on screen
+                        let safe_x = x.min((WINDOW_WIDTH as usize).saturating_sub(text_width));
+                        let safe_y = y.min(WINDOW_HEIGHT as usize).saturating_sub(text_height);
 
                         text_renderer.draw_text(
                             &hover_info,
