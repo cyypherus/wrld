@@ -1,0 +1,14 @@
+[package]
+name = "wrld"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rand = "0.8"
+rand_chacha = "0.3"
+fastrand = "2.0"
+pixels = "0.13.0"
+winit = "0.28.7"
+winit_input_helper = "0.14.1"
+noise = "0.8"
+embedded-graphics = "0.8.1"
