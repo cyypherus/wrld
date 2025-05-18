@@ -121,37 +121,7 @@ impl Renderer {
                                 ));
                                 info.push_str("     Terrain: Fastest travel path for entities\n");
                             }
-                            _ => {
-                                // For any terrain type, add terrain cost information
-                                let mut terrain_desc = String::new();
-                                match &item_box.item {
-                                    Item::Dirt => terrain_desc = "Easy to traverse".to_string(),
-                                    Item::Grass => terrain_desc = "Easy to traverse".to_string(),
-                                    Item::Sand => {
-                                        terrain_desc = "Somewhat slows movement".to_string()
-                                    }
-                                    Item::Snow => {
-                                        terrain_desc = "Significantly slows movement".to_string()
-                                    }
-                                    Item::Log => {
-                                        terrain_desc = "Obstacle, difficult to cross".to_string()
-                                    }
-                                    Item::Rock => {
-                                        terrain_desc =
-                                            "Obstacle, very difficult to cross".to_string()
-                                    }
-                                    Item::Mountain => {
-                                        terrain_desc =
-                                            "Major obstacle, extremely difficult to cross"
-                                                .to_string()
-                                    }
-                                    _ => {}
-                                }
-
-                                if !terrain_desc.is_empty() {
-                                    info.push_str(&format!("     Terrain: {}\n", terrain_desc));
-                                }
-                            }
+                            _ => {}
                         }
 
                         // Add effects if there are any
@@ -159,32 +129,32 @@ impl Renderer {
                             info.push_str("     Effects:\n");
                             for effect in &item_box.effects {
                                 // Enhanced effect description with intensity and duration
-                                let mut effect_desc = format!(
-                                    "       • {} - Intensity: {}%",
-                                    effect.kind, effect.intensity
-                                );
-
-                                // Add duration information if available
-                                if let Some(duration) = &effect.duration {
-                                    let seconds = duration;
-                                    if *seconds > 60 {
-                                        let minutes = seconds / 60;
-                                        effect_desc.push_str(&format!(
-                                            ", Duration: {}m {}s",
-                                            minutes,
-                                            seconds % 60
-                                        ));
-                                    } else {
-                                        effect_desc.push_str(&format!(", Duration: {}s", seconds));
-                                    }
-                                } else {
-                                    effect_desc.push_str(" (Permanent)");
-                                }
+                                let mut effect_desc = "         ".to_string();
 
                                 // Add effect description based on type
                                 match &effect.kind {
                                     crate::entity::effect::EffectType::Healthy => {
-                                        effect_desc.push_str(" - Health level");
+                                        let health_status = match effect.intensity {
+                                            0..=20 => "Recovering",
+                                            21..=40 => "Stable",
+                                            41..=60 => "Good",
+                                            61..=80 => "Excellent",
+                                            _ => "Peak condition",
+                                        };
+                                        effect_desc.push_str(&format!(" - {}", health_status));
+                                    }
+                                    crate::entity::effect::EffectType::Injured => {
+                                        let injury_severity = match effect.intensity {
+                                            0..=20 => "Minor scratches",
+                                            21..=40 => "Moderate wounds",
+                                            41..=60 => "Serious injuries",
+                                            61..=80 => "Severe trauma",
+                                            _ => "Critical condition",
+                                        };
+                                        effect_desc.push_str(&format!(" - {}", injury_severity));
+                                    }
+                                    crate::entity::effect::EffectType::Dead => {
+                                        effect_desc.push_str(" - Entity is deceased");
                                     }
                                     crate::entity::effect::EffectType::Hungry => {
                                         let hunger_status = match effect.intensity {
@@ -206,10 +176,50 @@ impl Renderer {
                                         };
                                         effect_desc.push_str(&format!(" - {}", thirst_status));
                                     }
-                                    crate::entity::effect::EffectType::Skilled(_skill) => {
-                                        effect_desc.push_str(" - Enables special abilities");
+                                    crate::entity::effect::EffectType::Skilled(skill) => {
+                                        match skill {
+                                            crate::entity::effect::Skill::Swimming => {
+                                                let skill_level = match effect.intensity {
+                                                    0..=20 => "Novice swimmer",
+                                                    21..=40 => "Decent swimmer",
+                                                    41..=60 => "Competent swimmer",
+                                                    61..=80 => "Strong swimmer",
+                                                    _ => "Expert swimmer",
+                                                };
+                                                effect_desc
+                                                    .push_str(&format!(" - {}", skill_level));
+                                            }
+                                        }
                                     }
-                                    _ => {}
+                                    crate::entity::effect::EffectType::Holding(item) => {
+                                        effect_desc.push_str(&format!(
+                                            " - Currently holding {}",
+                                            item.get_name()
+                                        ));
+                                    }
+                                    crate::entity::effect::EffectType::PreferredDirection(
+                                        direction,
+                                    ) => {
+                                        effect_desc
+                                            .push_str(&format!(" - Prefers moving {}", direction));
+                                    }
+                                }
+
+                                // Add duration information if available
+                                if let Some(duration) = &effect.duration {
+                                    let seconds = duration;
+                                    if *seconds > 60 {
+                                        let minutes = seconds / 60;
+                                        effect_desc.push_str(&format!(
+                                            ", Duration: {}m {}s",
+                                            minutes,
+                                            seconds % 60
+                                        ));
+                                    } else {
+                                        effect_desc.push_str(&format!(", Duration: {}s", seconds));
+                                    }
+                                } else {
+                                    effect_desc.push_str(" (Permanent)");
                                 }
 
                                 info.push_str(&format!("{}\n", effect_desc));

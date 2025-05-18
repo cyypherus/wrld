@@ -63,6 +63,22 @@ pub enum Direction {
     None,
 }
 
+impl std::fmt::Display for Direction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Direction::North => write!(f, "North"),
+            Direction::East => write!(f, "East"),
+            Direction::South => write!(f, "South"),
+            Direction::West => write!(f, "West"),
+            Direction::NorthEast => write!(f, "Northeast"),
+            Direction::SouthEast => write!(f, "Southeast"),
+            Direction::SouthWest => write!(f, "Southwest"),
+            Direction::NorthWest => write!(f, "Northwest"),
+            Direction::None => write!(f, "None"),
+        }
+    }
+}
+
 /// Action that an item can perform
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -76,6 +92,7 @@ pub enum Interaction {
     PickUp,
     Drop,
     Consume,
+    Mate,
 }
 
 /// Container for item data with common properties
@@ -120,10 +137,10 @@ impl ItemBox {
         Self { item, effects }
     }
 
-    pub fn health(&mut self) -> u32 {
+    pub fn health(&self) -> u32 {
         if let Some(health) = self
             .effects
-            .iter_mut()
+            .iter()
             .find(|e| matches!(e.kind, EffectType::Healthy))
         {
             return health.intensity;
@@ -159,10 +176,20 @@ impl ItemBox {
             }
         }
     }
-    pub fn thirst(&mut self) -> u32 {
+    pub fn hunger(&self) -> u32 {
+        if let Some(hunger) = self
+            .effects
+            .iter()
+            .find(|e| matches!(e.kind, EffectType::Hungry))
+        {
+            return hunger.intensity;
+        }
+        0
+    }
+    pub fn thirst(&self) -> u32 {
         if let Some(thirst) = self
             .effects
-            .iter_mut()
+            .iter()
             .find(|e| matches!(e.kind, EffectType::Thirsty))
         {
             return thirst.intensity;
@@ -205,6 +232,85 @@ impl ItemBox {
             _ => (0, 0, 0),
         }
     }
+    pub fn preferred_direction(&self) -> Option<Direction> {
+        if let Some(Effect {
+            kind: EffectType::PreferredDirection(d),
+            ..
+        }) = self
+            .effects
+            .iter()
+            .find(|e| matches!(e.kind, EffectType::PreferredDirection(_)))
+        {
+            return Some(*d);
+        }
+        None
+    }
+    pub fn prefer_direction(&mut self, direction: Option<Direction>) {
+        if let Some(direction) = direction {
+            self.effects.push(Effect::permanent(
+                EffectType::PreferredDirection(direction),
+                100,
+            ));
+        } else {
+            self.effects
+                .retain(|e| !matches!(e.kind, EffectType::PreferredDirection(_)));
+        }
+    }
+    pub fn primary_need(&self) -> (Priority, Need) {
+        let mut _health_level = 100;
+        let mut hunger_level = 0;
+        let mut thirst_level = 0;
+
+        // Process all effects to determine the entity's state
+        for effect in &self.effects {
+            match &effect.kind {
+                EffectType::Healthy => {
+                    _health_level = effect.intensity;
+                }
+                EffectType::Hungry => {
+                    hunger_level = effect.intensity;
+                }
+                EffectType::Thirsty => {
+                    thirst_level = effect.intensity;
+                }
+                EffectType::Injured | _ => {}
+            }
+        }
+
+        // Determine the primary need and its priority
+        let primary_need: (Priority, Need) = if thirst_level > 80 {
+            (Priority::Critical, Need::Water)
+        } else if hunger_level > 80 {
+            (Priority::Critical, Need::Food)
+        } else if thirst_level > 50 {
+            (Priority::Urgent, Need::Water)
+        } else if hunger_level > 50 {
+            (Priority::Urgent, Need::Food)
+        } else if hunger_level > 30 {
+            (Priority::Normal, Need::Food)
+        } else if fastrand::bool() {
+            (Priority::Low, Need::Items)
+        } else {
+            (Priority::Low, Need::Exploration)
+        };
+        primary_need
+    }
+}
+// Define priority levels for decision making
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Priority {
+    Low,      // General collection/exploration
+    Normal,   // Thirst/Hunger > 30%
+    Urgent,   // Thirst/Hunger > 50%
+    Critical, // Health < 20%, Thirst/Hunger > 80%
+}
+// Define the entity's possible needs
+#[derive(Debug)]
+pub enum Need {
+    Water,
+    Food,
+    Items,
+    Exploration,
 }
 
 /// All possible items in the world
@@ -564,6 +670,7 @@ impl ItemBox {
                     actor.heal(item.nutrition().0);
                     actor.eat(item.nutrition().1);
                     actor.drink(item.nutrition().2);
+                    target.items.remove(z);
 
                     return (
                         true,
@@ -607,6 +714,40 @@ impl ItemBox {
                     _ => (false, "No item to pick up".to_string()),
                 }
             }
+            Interaction::Mate => match &item.item {
+                Item::Traveler { name: mate_name } => {
+                    let Item::Traveler { name: actor_name } = &item.item else {
+                        return (false, "No item to mate".to_string());
+                    };
+                    let baby_name = format!("{}Jr", actor_name);
+
+                    // Create the baby
+                    let baby = Item::Traveler {
+                        name: baby_name.clone(),
+                    };
+                    let baby_effects = vec![
+                        Effect::permanent(EffectType::Healthy, 100),
+                        Effect::permanent(EffectType::Hungry, 30),
+                        Effect::permanent(EffectType::Thirsty, 30),
+                    ];
+                    actor.effects.push(Effect::permanent(
+                        EffectType::Holding(ItemBox {
+                            item: baby,
+                            effects: baby_effects,
+                        }),
+                        100,
+                    ));
+                    println!(
+                        "A new traveler {} was born to {} and {}",
+                        baby_name, actor_name, mate_name
+                    );
+                    (
+                        true,
+                        format!("Successfully created a baby traveler named {}", baby_name),
+                    )
+                }
+                _ => (false, "No item to pick up".to_string()),
+            },
         }
     }
 }

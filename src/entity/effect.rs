@@ -1,6 +1,8 @@
 use std::fmt;
 
-use super::item::ItemBox;
+use fastrand::digit;
+
+use super::item::{Direction, ItemBox};
 
 // Forward declaration to avoid circular references
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,39 +91,21 @@ pub struct Effect {
 /// All possible effect types in the world
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EffectType {
-    // Environmental effects
-    Wet,
-    Dry,
-    Hot,
-    Cold,
-
     // Health effects
     Healthy,
-    Sick,
     Injured,
-    Poisoned,
     Dead,
 
     // Status effects
     Hungry,
     Thirsty,
-    Tired,
-    Energetic,
-
-    // Psychological effects
-    Happy,
-    Sad,
-    Angry,
-    Scared,
-
-    // Economic effects
-    Wealthy,
-    Poor,
 
     Skilled(Skill),
 
     // Inventory effects
     Holding(ItemBox), // Holding an item
+
+    PreferredDirection(Direction),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,8 +139,6 @@ impl Effect {
         Self::permanent(EffectType::Holding(item_type.clone()), 100)
     }
 
-    /// Create an equipped effect (wearing/using an item)
-
     /// Update the effect duration, returns true if the effect is still active
     pub fn update(&mut self) -> bool {
         if let Some(remaining) = &mut self.time_remaining {
@@ -181,69 +163,6 @@ impl Effect {
             // Permanent effects never expire
             false
         }
-    }
-
-    /// Get a description of the effect
-    pub fn description(&self) -> String {
-        let effect_name = match &self.kind {
-            EffectType::Wet => "Wet".to_string(),
-            EffectType::Dry => "Dry".to_string(),
-            EffectType::Hot => "Hot".to_string(),
-            EffectType::Cold => "Cold".to_string(),
-            EffectType::Healthy => "Healthy".to_string(),
-            EffectType::Sick => "Sick".to_string(),
-            EffectType::Injured => "Injured".to_string(),
-            EffectType::Poisoned => "Poisoned".to_string(),
-            EffectType::Dead => "Dead".to_string(),
-            EffectType::Hungry => "Hungry".to_string(),
-            EffectType::Thirsty => "Thirsty".to_string(),
-            EffectType::Tired => "Tired".to_string(),
-            EffectType::Energetic => "Energetic".to_string(),
-            EffectType::Happy => "Happy".to_string(),
-            EffectType::Sad => "Sad".to_string(),
-            EffectType::Angry => "Angry".to_string(),
-            EffectType::Scared => "Scared".to_string(),
-            EffectType::Wealthy => "Wealthy".to_string(),
-            EffectType::Poor => "Poor".to_string(),
-            EffectType::Skilled(skill) => match skill {
-                Skill::Swimming => "Skilled in Swimming".to_string(),
-            },
-            EffectType::Holding(item) => format!("Holding {}", item),
-        };
-
-        let intensity_desc = match self.intensity {
-            0..=20 => "Slightly",
-            21..=40 => "Moderately",
-            41..=60 => "Very",
-            61..=80 => "Extremely",
-            _ => "Overwhelmingly",
-        };
-
-        let duration_desc = if let Some(remaining) = self.time_remaining {
-            format!(" ({} seconds remaining)", remaining)
-        } else {
-            "".to_string()
-        };
-
-        format!("{} {}{}", intensity_desc, effect_name, duration_desc)
-    }
-
-    /// Check if this effect counters another effect
-    pub fn counters(&self, other: &EffectType) -> bool {
-        matches!(
-            (&self.kind, other),
-            (EffectType::Wet, EffectType::Dry)
-                | (EffectType::Dry, EffectType::Wet)
-                | (EffectType::Hot, EffectType::Cold)
-                | (EffectType::Cold, EffectType::Hot)
-                | (EffectType::Healthy, EffectType::Sick)
-                | (EffectType::Healthy, EffectType::Injured)
-                | (EffectType::Healthy, EffectType::Poisoned)
-                | (EffectType::Energetic, EffectType::Tired)
-                | (EffectType::Happy, EffectType::Sad)
-                | (EffectType::Wealthy, EffectType::Poor)
-                | (EffectType::Poor, EffectType::Wealthy)
-        )
     }
 }
 
@@ -309,29 +228,18 @@ impl fmt::Display for Object {
 impl fmt::Display for EffectType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EffectType::Wet => write!(f, "Wet"),
-            EffectType::Dry => write!(f, "Dry"),
-            EffectType::Hot => write!(f, "Hot"),
-            EffectType::Cold => write!(f, "Cold"),
             EffectType::Healthy => write!(f, "Healthy"),
-            EffectType::Sick => write!(f, "Sick"),
             EffectType::Injured => write!(f, "Injured"),
-            EffectType::Poisoned => write!(f, "Poisoned"),
             EffectType::Dead => write!(f, "Dead"),
             EffectType::Hungry => write!(f, "Hungry"),
             EffectType::Thirsty => write!(f, "Thirsty"),
-            EffectType::Tired => write!(f, "Tired"),
-            EffectType::Energetic => write!(f, "Energetic"),
-            EffectType::Happy => write!(f, "Happy"),
-            EffectType::Sad => write!(f, "Sad"),
-            EffectType::Angry => write!(f, "Angry"),
-            EffectType::Scared => write!(f, "Scared"),
-            EffectType::Wealthy => write!(f, "Wealthy"),
-            EffectType::Poor => write!(f, "Poor"),
             EffectType::Skilled(skill) => match skill {
                 Skill::Swimming => write!(f, "Skilled in Swimming"),
             },
             EffectType::Holding(item) => write!(f, "Holding {}", item),
+            EffectType::PreferredDirection(direction) => {
+                write!(f, "Preferred Direction {}", direction)
+            }
         }
     }
 }

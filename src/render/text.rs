@@ -91,7 +91,7 @@ impl TextRenderer {
         let char_width = 6;
         let char_height = 10;
         let line_spacing = 2;
-        let padding = 4;
+        let padding = 40;
 
         let longest_line = lines.iter().map(|line| line.len()).max().unwrap_or(0);
         let text_width = longest_line * char_width + padding * 2;

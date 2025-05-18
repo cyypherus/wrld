@@ -1,8 +1,11 @@
 use crate::DEFAULT_HEALTH;
 use crate::entity::effect::{Effect, EffectType, FoodType, Object};
-use crate::entity::item::{Action, CorpseType, Direction, Interaction, Item, ItemBox};
+use crate::entity::item::{
+    Action, CorpseType, Direction, Interaction, Item, ItemBox, Need, Priority,
+};
 use crate::world::town_gen::TownGenerator;
 use crate::world::world_gen::{WorldGenParams, WorldGenerator};
+
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fmt;
@@ -31,7 +34,7 @@ impl PartialOrd for PathNode {
 /// A stack of items in a single grid cell
 #[derive(Clone)]
 pub struct ItemStack {
-    items: Vec<ItemBox>,
+    pub items: Vec<ItemBox>,
 }
 
 impl ItemStack {
@@ -616,6 +619,11 @@ impl World {
 
     /// Process one tick of the world, allowing all actors to take their actions
     pub fn tick(&mut self) {
+        // Periodically spawn food in the world (adjusted for balance)
+        if fastrand::u8(0..100) < 10 {
+            self.spawn_food();
+        }
+
         // Process actors first, then apply effects
         // This ensures that any thirst/hunger reductions apply before increasing them again
 
@@ -669,10 +677,11 @@ impl World {
                     // Get action based on surroundings
                     let action = match &actor_clone.item {
                         Item::Traveler { .. } => {
-                            self.decide_action(&actor_clone, &effects, &surroundings, x, y)
+                            self.decide_action(actor, &effects, &surroundings, x, y)
                         }
                         _ => Action::Wait,
                     };
+                    self.update_actor(x, y, actor.clone());
 
                     // Execute the action
                     match action {
@@ -697,11 +706,10 @@ impl World {
 
                                     // Process the interaction
                                     // Create a mutable copy of the actor to work with
-                                    let mut actor_mut = actor_clone.clone();
 
                                     // Process the interaction with direct modification
                                     let (success, message) = ItemBox::process_interaction(
-                                        &mut actor_mut,
+                                        actor,
                                         target_stack,
                                         tz,
                                         interaction,
@@ -712,17 +720,11 @@ impl World {
                                         println!("Interaction succeeded: {}", message);
 
                                         // Replace the actor with the modified version that has updated effects - need to update actor at original position
-                                        if let Some(actor) =
-                                            self.get_mut(x, y).and_then(|s| s.find_actor())
-                                        {
-                                            // Make sure we preserve the actor's updated effects
-                                            actor.effects = actor_mut.effects.clone();
-
-                                            println!("Updated actor effects after interaction");
-                                        }
+                                        println!("Updated actor effects after interaction");
                                     } else {
                                         println!("Interaction failed: {}", message);
                                     }
+                                    self.update_actor(x, y, actor.clone());
                                 }
                             }
                         }
@@ -738,105 +740,79 @@ impl World {
         self.apply_effects();
     }
 
+    fn update_actor(&mut self, x: usize, y: usize, actor: ItemBox) {
+        if let Some(i) = self.grid[y][x]
+            .items
+            .iter_mut()
+            .position(|item_box| item_box.can_act())
+        {
+            self.grid[y][x].items[i] = actor.clone();
+        }
+    }
+
+    /// Spawns a random food item somewhere in the world
+    fn spawn_food(&mut self) {
+        let max_attempts = 50;
+
+        for _ in 0..max_attempts {
+            // Pick a random position
+            let x = fastrand::usize(0..self.width);
+            let y = fastrand::usize(0..self.height);
+
+            // Check if the position has grass (food should grow on grass)
+            if let Some(stack) = self.get(x, y) {
+                let has_grass = stack
+                    .items()
+                    .iter()
+                    .any(|item| matches!(item.item, Item::Grass));
+                let has_traveler = stack
+                    .items()
+                    .iter()
+                    .any(|item| matches!(item.item, Item::Traveler { .. }));
+                let has_food = stack
+                    .items()
+                    .iter()
+                    .any(|item| matches!(item.item, Item::Object(Object::Food(_))));
+
+                // Only spawn food on grass where there isn't already food or a traveler
+                if has_grass && !has_traveler && !has_food {
+                    // Create a random food item
+                    let food_type = match fastrand::usize(0..3) {
+                        0 => FoodType::Bread,
+                        1 => FoodType::Fruit,
+                        _ => FoodType::Vegetable,
+                    };
+
+                    let food_item = Item::Object(Object::Food(food_type));
+
+                    // Add the food to the world
+                    self.add_item(x, y, food_item);
+                    println!("Spawned new food item at ({}, {})", x, y);
+                    return;
+                }
+            }
+        }
+    }
     /// Decide what action an item should take
     fn decide_action(
         &self,
-        item_box: &ItemBox,
+        item_box: &mut ItemBox,
         effects: &[Effect],
         surroundings: &[Vec<Option<(&ItemBox, usize)>>],
         x: usize,
         y: usize,
     ) -> Action {
-        use crate::entity::effect::EffectType;
-
-        // Define priority levels for decision making
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-        enum Priority {
-            Critical, // Health < 20%, Thirst/Hunger > 80%
-            Urgent,   // Thirst/Hunger > 50%
-            Normal,   // Thirst/Hunger > 30%
-            Low,      // General collection/exploration
-        }
-
-        // Helper function to compare priorities (higher is better)
-        fn priority_level_better(a: Priority, b: Priority) -> bool {
-            match (a, b) {
-                (Priority::Critical, _) => b != Priority::Critical,
-                (Priority::Urgent, Priority::Critical) => false,
-                (Priority::Urgent, _) => true,
-                (Priority::Normal, Priority::Critical | Priority::Urgent) => false,
-                (Priority::Normal, _) => true,
-                (Priority::Low, _) => false,
-            }
-        }
-
-        match &item_box.item {
+        match item_box.item.clone() {
             Item::Traveler { name } => {
-                // Define the entity's possible needs
-                #[derive(Debug)]
-                enum Need {
-                    Water,
-                    Food,
-                    Items,
-                    Exploration,
-                }
-
-                let mut health_level = 100;
-                let mut hunger_level = 0;
-                let mut thirst_level = 0;
-                let mut _has_critical_health = false;
-
-                // Process all effects to determine the entity's state
-                for effect in effects {
-                    match &effect.kind {
-                        EffectType::Healthy => {
-                            health_level = effect.intensity;
-                        }
-                        EffectType::Hungry => {
-                            hunger_level = effect.intensity;
-                        }
-                        EffectType::Thirsty => {
-                            thirst_level = effect.intensity;
-                            // Debug thirst levels
-                            println!("Current thirst level for {}: {}%", name, thirst_level);
-                        }
-                        EffectType::Injured | EffectType::Sick | EffectType::Poisoned => {
-                            if effect.intensity > 50 {
-                                _has_critical_health = true;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Determine the primary need and its priority
-                let primary_need: (Priority, Need) = if thirst_level > 80 {
-                    (Priority::Critical, Need::Water)
-                } else if hunger_level > 80 {
-                    (Priority::Critical, Need::Food)
-                } else if thirst_level > 50 {
-                    (Priority::Urgent, Need::Water)
-                } else if hunger_level > 50 {
-                    (Priority::Urgent, Need::Food)
-                } else if hunger_level > 30 {
-                    (Priority::Normal, Need::Food)
-                } else if fastrand::bool() {
-                    (Priority::Low, Need::Items)
-                } else {
-                    (Priority::Low, Need::Exploration)
-                };
-
-                println!(
-                    "Traveler {} primary need: {:?} with priority {:?} (Health: {}, Hunger: {}, Thirst: {})",
-                    name, primary_need.1, primary_need.0, health_level, hunger_level, thirst_level
-                );
+                let primary_need = item_box.primary_need();
+                let preferred_direction = item_box.preferred_direction();
+                item_box.prefer_direction(None);
 
                 // ---- 2. Scan surroundings once and act based on priority ----
 
                 // Track the best action found while scanning
                 let mut best_action = None;
                 let mut best_priority = Priority::Low;
-                let mut best_distance = f32::MAX;
 
                 // Scan all surrounding cells in a single loop
                 for (y_idx, row) in surroundings.iter().enumerate() {
@@ -849,42 +825,35 @@ impl World {
                         let rx = x_idx as isize - 1;
                         let ry = y_idx as isize - 1;
 
-                        // Get the distance from center (Manhattan distance)
-                        let distance = (rx.abs() + ry.abs()) as f32;
-
                         // Check the item at this position
                         if let Some((item_box, idx)) = cell {
+                            // Helper to update best action if it has higher priority or same with lower distance
+                            let mut update_if_better = |action, priority| {
+                                if priority > best_priority {
+                                    best_action = Some(action);
+                                    best_priority = priority;
+                                    true
+                                } else {
+                                    false
+                                }
+                            };
+
                             match &item_box.item {
                                 // Food items
                                 Item::Object(Object::Food(_)) => {
                                     if matches!(primary_need.1, Need::Food) {
                                         let action =
                                             Action::Interact((rx, ry, *idx), Interaction::Consume);
-
-                                        // If this is the primary need, it's the best action
-                                        if matches!(primary_need.1, Need::Food)
-                                            && (priority_level_better(
-                                                primary_need.0,
-                                                best_priority,
-                                            ) || (primary_need.0 == best_priority
-                                                && distance < best_distance))
-                                        {
-                                            best_action = Some(action);
-                                            best_priority = primary_need.0;
-                                            best_distance = distance;
+                                        if update_if_better(action, primary_need.0) {
+                                            println!(
+                                                "Found food item for hungry traveler {}",
+                                                name
+                                            );
                                         }
                                     } else if matches!(primary_need.1, Need::Items) {
                                         let action =
                                             Action::Interact((rx, ry, *idx), Interaction::PickUp);
-
-                                        if priority_level_better(Priority::Low, best_priority)
-                                            || (Priority::Low == best_priority
-                                                && distance < best_distance)
-                                        {
-                                            best_action = Some(action);
-                                            best_priority = Priority::Low;
-                                            best_distance = distance;
-                                        }
+                                        update_if_better(action, Priority::Low);
                                     }
                                 }
 
@@ -893,14 +862,7 @@ impl World {
                                     if matches!(primary_need.1, Need::Water) {
                                         let action =
                                             Action::Interact((rx, ry, *idx), Interaction::Consume);
-
-                                        if priority_level_better(primary_need.0, best_priority)
-                                            || (primary_need.0 == best_priority
-                                                && distance < best_distance)
-                                        {
-                                            best_action = Some(action);
-                                            best_priority = primary_need.0;
-                                            best_distance = distance;
+                                        if update_if_better(action, primary_need.0) {
                                             println!("Found water for thirsty traveler {}", name);
                                         }
                                     }
@@ -908,21 +870,11 @@ impl World {
 
                                 // Corpses (can be eaten when very hungry)
                                 Item::Corpse { .. } => {
-                                    if matches!(primary_need.1, Need::Food) && hunger_level > 70 {
+                                    if matches!(primary_need.1, Need::Food) {
                                         let action =
                                             Action::Interact((rx, ry, *idx), Interaction::Consume);
-
-                                        if priority_level_better(primary_need.0, best_priority)
-                                            || (primary_need.0 == best_priority
-                                                && distance < best_distance)
-                                        {
-                                            best_action = Some(action);
-                                            best_priority = primary_need.0;
-                                            best_distance = distance;
-                                            println!(
-                                                "Found food item for hungry traveler {}",
-                                                name
-                                            );
+                                        if update_if_better(action, primary_need.0) {
+                                            println!("Found corpse for hungry traveler {}", name);
                                         }
                                     }
                                 }
@@ -932,26 +884,14 @@ impl World {
                                     if matches!(primary_need.1, Need::Items) {
                                         let action =
                                             Action::Interact((rx, ry, *idx), Interaction::PickUp);
-
-                                        if priority_level_better(Priority::Low, best_priority)
-                                            || (Priority::Low == best_priority
-                                                && distance < best_distance)
-                                        {
-                                            best_action = Some(action);
-                                            best_priority = Priority::Low;
-                                            best_distance = distance;
-                                        }
+                                        update_if_better(action, Priority::Low);
                                     }
                                 }
 
                                 // Interesting exploration targets
                                 Item::Grass | Item::Rock | Item::Log => {
                                     if matches!(primary_need.1, Need::Exploration) {
-                                        // Calculate movement direction
-                                        let dx = rx;
-                                        let dy = ry;
-
-                                        let direction = match (dx, dy) {
+                                        let direction = match (rx, ry) {
                                             (0, -1) => Direction::North,
                                             (1, 0) => Direction::East,
                                             (0, 1) => Direction::South,
@@ -965,20 +905,42 @@ impl World {
 
                                         if direction != Direction::None {
                                             let action = Action::Move(direction);
-
-                                            if priority_level_better(Priority::Low, best_priority)
-                                                || (Priority::Low == best_priority
-                                                    && distance < best_distance)
-                                            {
-                                                best_action = Some(action);
-                                                best_priority = Priority::Low;
-                                                best_distance = distance;
-                                            }
+                                            update_if_better(action, Priority::Low);
                                         }
                                     }
                                 }
 
                                 _ => {}
+                            }
+                        }
+                    }
+                }
+
+                // Check for mating opportunities if actor is in good health
+                if item_box.hunger() < 30 && item_box.thirst() < 30 && item_box.health() > 70 {
+                    // Look for another traveler nearby
+                    for (y_idx, row) in surroundings.iter().enumerate() {
+                        for (x_idx, cell) in row.iter().enumerate() {
+                            if x_idx == 1 && y_idx == 1 {
+                                continue; // Skip self position
+                            }
+
+                            if let Some((item_box, idx)) = cell {
+                                if let Item::Traveler { name: other_name } = &item_box.item {
+                                    if fastrand::u8(0..100) < 5 {
+                                        // 5% chance of mating when conditions are right
+                                        println!(
+                                            "Traveler {} attempting to mate with {}",
+                                            name, other_name
+                                        );
+
+                                        // Convert to relative coordinates
+                                        let rx = x_idx as isize - 1;
+                                        let ry = y_idx as isize - 1;
+
+                                        return Action::Interact((rx, ry, *idx), Interaction::Mate);
+                                    }
+                                }
                             }
                         }
                     }
@@ -1092,8 +1054,46 @@ impl World {
                     }
                 }
 
-                // If no specific action was determined, move randomly
-                if fastrand::u8(0..100) < 30 {
+                // If no specific action was determined, move with directional persistence
+                // Get the current persistent direction for this entity
+                let direction = if let Some(dir) = preferred_direction {
+                    // Use the existing direction if it exists
+                    println!("Traveler {} continuing in direction: {:?}", name, dir);
+
+                    // Check if we hit a barrier in that direction
+                    let (nx, ny) = match dir {
+                        Direction::North => (x, y.saturating_sub(1)),
+                        Direction::East => (x + 1, y),
+                        Direction::South => (x, y + 1),
+                        Direction::West => (x.saturating_sub(1), y),
+                        _ => (x, y),
+                    };
+
+                    // Check if the new position is passable
+                    if nx < self.width && ny < self.height && self.is_passable(nx, ny) {
+                        dir
+                    } else {
+                        // Hit a barrier, pick a new random direction
+                        let directions = [
+                            Direction::North,
+                            Direction::East,
+                            Direction::South,
+                            Direction::West,
+                        ];
+
+                        let new_dir = directions[fastrand::usize(0..directions.len())];
+                        println!(
+                            "Traveler {} hit barrier, new direction: {:?}",
+                            name, new_dir
+                        );
+
+                        // Set the new direction for persistence
+                        // Can't set direction here because self is immutable
+                        // Direction will be set on next tick
+                        new_dir
+                    }
+                } else {
+                    // Pick a new random direction and record it
                     let directions = [
                         Direction::North,
                         Direction::East,
@@ -1101,17 +1101,21 @@ impl World {
                         Direction::West,
                     ];
 
-                    // Try random directions until finding a valid move
-                    let direction = directions[fastrand::usize(0..directions.len())];
+                    // Select a random direction
+                    let new_dir = directions[fastrand::usize(0..directions.len())];
+                    println!("Traveler {} picking new direction: {:?}", name, new_dir);
 
-                    // No need to check validity - movement gets validated elsewhere
-                    println!("Traveler {} moving randomly: {:?}", name, direction);
-                    return Action::Move(direction);
-                }
+                    item_box.prefer_direction(Some(new_dir));
+                    // Can't set direction here because self is immutable
+                    // Direction will be set on next tick
+                    new_dir
+                };
 
-                // Default to waiting
-                println!("Traveler {} waiting", name);
-                Action::Wait
+                // Debug info
+                println!("Traveler {} moving with direction: {:?}", name, direction);
+
+                // No need to check validity - movement gets validated elsewhere
+                Action::Move(direction)
             }
             _ => Action::Wait,
         }
@@ -1182,7 +1186,6 @@ impl World {
 
                                         if matches!(effect.kind, EffectType::Thirsty) {
                                             // Increase thirst over time (faster than hunger)
-                                            // Increase thirst more slowly to allow consumption effects to be visible
                                             effect.intensity = (effect.intensity + 1).min(100);
                                         }
 

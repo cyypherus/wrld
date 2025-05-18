@@ -73,9 +73,7 @@ fn main() -> Result<(), Error> {
     }
 
     // Add some NPCs
-    add_npcs(&mut world, 20);
-
-    // add_animals(&mut world, 3);
+    add_npcs(&mut world, 50);
 
     // Add additional items to the world
     add_items(&mut world, 50);
@@ -116,7 +114,7 @@ fn main() -> Result<(), Error> {
 
             // Increase speed with Up arrow
             if input.key_pressed(VirtualKeyCode::Up) {
-                current_speed = (current_speed + 25).min(300); // Maximum 300% speed
+                current_speed = (current_speed + 5).min(300); // Maximum 300% speed
                 SIMULATION_SPEED.store(current_speed, Ordering::Relaxed);
                 println!("Simulation speed: {}%", current_speed);
                 window.request_redraw();
@@ -124,7 +122,7 @@ fn main() -> Result<(), Error> {
 
             // Decrease speed with Down arrow
             if input.key_pressed(VirtualKeyCode::Down) {
-                current_speed = current_speed.saturating_sub(25).max(25); // Minimum 25% speed
+                current_speed = current_speed.saturating_sub(5).max(5); // Minimum 25% speed
                 SIMULATION_SPEED.store(current_speed, Ordering::Relaxed);
                 println!("Simulation speed: {}%", current_speed);
                 window.request_redraw();
