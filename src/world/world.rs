@@ -225,12 +225,12 @@ impl World {
             elevation_scale: 0.06,    // Lower scale for larger features
             moisture_scale: 0.05,     // Lower scale for moisture patterns
             vegetation_scale: 0.12,   // Lower scale for vegetation patterns
-            sea_level: 0.22,          // Higher sea level for more islands
-            beach_level: 0.26,        // Adjusted beach level
+            sea_level: 0.32,          // Higher sea level for more islands
+            beach_level: 0.36,        // Adjusted beach level
             elevation_amplitude: 1.3, // Higher amplitude for more dramatic terrain
 
-            river_count: 15, // More rivers
-            river_width: 1., // Slightly thinner rivers
+            river_count: 15,  // More rivers
+            river_width: 0.5, // Slightly thinner rivers
         };
 
         // Create generator with custom parameters
