@@ -84,7 +84,7 @@ impl std::fmt::Display for Direction {
 #[derive(Debug, Clone)]
 pub enum Action {
     Move(Direction),
-    Interact((isize, isize, usize), Interaction), // Coordinates to interact with
+    Interact(Option<(isize, isize, usize)>, Option<usize>, Interaction), // Coordinates to interact with
     Wait,
 }
 
@@ -690,30 +690,49 @@ impl ItemBox {
     /// Process interactions between items
     pub fn process_interaction(
         actor: &mut ItemBox,
-        target: &mut ItemStack,
-        z: usize,
+        target: Option<(&mut ItemStack, usize)>,
+        held_target: Option<usize>,
         interaction: Interaction,
     ) -> (bool, String) {
-        let item = &target.items()[z].clone();
         // Process the interaction based on type
         match interaction {
             Interaction::Consume => {
-                if item.nutrition().2 > 0 {
-                    actor.heal(item.nutrition().0);
-                    actor.eat(item.nutrition().1);
-                    actor.drink(item.nutrition().2);
+                let consumed_item: (i32, i32, i32);
+                let name: String;
+                if let Some((target, z)) = target {
+                    let item = target.items()[z].clone();
+                    consumed_item = item.nutrition();
+                    name = item.get_name();
                     if !matches!(item.item, Item::Water | Item::DeepWater) {
                         target.items.remove(z);
                     }
+                } else if let Some(held) = held_target {
+                    if let Effect {
+                        kind: EffectType::Holding(dropped),
+                        intensity: _,
+                        duration: _,
+                    } = actor.effects.remove(held)
+                    {
+                        consumed_item = dropped.nutrition();
+                        name = dropped.get_name();
+                    } else {
+                        consumed_item = (0, 0, 0);
+                        name = "Nothing".to_string();
+                    }
+                } else {
+                    consumed_item = (0, 0, 0);
+                    name = "Nothing".to_string();
+                };
+                if consumed_item.2 > 0 {
+                    actor.heal(consumed_item.0);
+                    actor.eat(consumed_item.1);
+                    actor.drink(consumed_item.2);
 
                     return (
                         true,
                         format!(
                             "Consumed {} and gained {}% health, {}% hunger, {}% thirst",
-                            item.get_name(),
-                            item.nutrition().0,
-                            item.nutrition().1,
-                            item.nutrition().2
+                            name, consumed_item.0, consumed_item.1, consumed_item.2
                         ),
                     );
                 }
@@ -722,14 +741,12 @@ impl ItemBox {
                 (false, "Cannot consume this item".to_string())
             }
             Interaction::Drop => {
-                let index = actor
-                    .effects
-                    .iter()
-                    .position(|e| matches!(e.kind, EffectType::Holding(_)));
-                if let Some(i) = index {
-                    if let EffectType::Holding(dropped) = actor.effects.remove(i).kind {
+                if let Some(held) = held_target {
+                    if let EffectType::Holding(dropped) = actor.effects.remove(held).kind {
                         let name = dropped.get_name();
-                        target.push(dropped);
+                        if let Some((target, z)) = target {
+                            target.push(dropped);
+                        }
                         return (true, format!("Dropped {}", name));
                     }
                 }
@@ -737,58 +754,73 @@ impl ItemBox {
             }
             Interaction::PickUp => {
                 // Handle picking up an item
-                match &item.item {
-                    Item::Object(_) => {
-                        // Add holding effect to actor
-                        actor
-                            .effects
-                            .push(Effect::permanent(EffectType::Holding(item.clone()), 100));
+                if let Some((target, z)) = target {
+                    let item = target.items()[z].clone();
+                    match &item.item {
+                        Item::Object(_) => {
+                            // Add holding effect to actor
+                            actor
+                                .effects
+                                .push(Effect::permanent(EffectType::Holding(item.clone()), 100));
 
-                        target.pop();
-                        (true, format!("Picked up {}", item.get_name()))
+                            target.pop();
+                            return (true, format!("Picked up {}", item.get_name()));
+                        }
+                        _ => {
+                            return (false, "No item to pick up".to_string());
+                        }
                     }
-                    _ => (false, "No item to pick up".to_string()),
                 }
+                (false, "No item to pick up".to_string())
             }
-            Interaction::Mate => match &item.item {
-                Item::Traveler { name: mate_name } => {
-                    let Item::Traveler { name: actor_name } = &item.item else {
-                        return (false, "No item to mate".to_string());
-                    };
-                    if actor.tired() || item.tired() {
-                        return (false, "Actor is too tired to mate".to_string());
-                    }
-                    let baby_name = format!("{} {}", generate_name(), mate_name);
+            Interaction::Mate => {
+                if let Some((target, z)) = target {
+                    let item = target.items()[z].clone();
 
-                    // Create the baby
-                    let baby = Item::Traveler {
-                        name: baby_name.clone(),
-                    };
-                    let baby_effects = vec![
-                        Effect::permanent(EffectType::Healthy, 100),
-                        Effect::permanent(EffectType::Hungry, 30),
-                        Effect::permanent(EffectType::Thirsty, 30),
-                        Effect::temporary(EffectType::Young, 100, 50),
-                    ];
-                    actor.effects.push(Effect::permanent(
-                        EffectType::Holding(ItemBox {
-                            item: baby,
-                            effects: baby_effects,
-                        }),
-                        100,
-                    ));
-                    actor.make_tired();
-                    println!(
-                        "A new traveler {} was born to {} and {}",
-                        baby_name, actor_name, mate_name
-                    );
-                    (
-                        true,
-                        format!("Successfully created a baby traveler named {}", baby_name),
-                    )
+                    match &item.item {
+                        Item::Traveler { name: mate_name } => {
+                            let Item::Traveler { name: actor_name } = &item.item else {
+                                return (false, "No item to mate".to_string());
+                            };
+                            if actor.tired() || item.tired() {
+                                return (false, "Actor is too tired to mate".to_string());
+                            }
+                            let baby_name = format!("{} {}", generate_name(), mate_name);
+
+                            // Create the baby
+                            let baby = Item::Traveler {
+                                name: baby_name.clone(),
+                            };
+                            let baby_effects = vec![
+                                Effect::permanent(EffectType::Healthy, 100),
+                                Effect::permanent(EffectType::Hungry, 30),
+                                Effect::permanent(EffectType::Thirsty, 30),
+                                Effect::temporary(EffectType::Young, 100, 50),
+                            ];
+                            actor.effects.push(Effect::permanent(
+                                EffectType::Holding(ItemBox {
+                                    item: baby,
+                                    effects: baby_effects,
+                                }),
+                                100,
+                            ));
+                            actor.make_tired();
+                            println!(
+                                "A new traveler {} was born to {} and {}",
+                                baby_name, actor_name, mate_name
+                            );
+                            return (
+                                true,
+                                format!("Successfully created a baby traveler named {}", baby_name),
+                            );
+                        }
+                        _ => {
+                            return (false, "Unable to mate with that".to_string());
+                        }
+                    }
                 }
-                _ => (false, "Unable to mate with that".to_string()),
-            },
+                (false, "Unable to mate with that".to_string())
+            }
         }
     }
 }

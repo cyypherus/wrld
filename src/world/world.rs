@@ -655,44 +655,41 @@ impl World {
                         Action::Move(direction) => {
                             self.move_item(x, y, direction);
                         }
-                        Action::Interact((tx, ty, tz), interaction) => {
-                            // Get the target coordinates relative to the actor's position
-                            let tx = (x as isize + tx) as usize;
-                            let ty = (y as isize + ty) as usize;
-                            if tx < width && ty < height {
-                                // Get the target item to interact with
-                                if let Some(target_stack) = self.get_mut(tx, ty) {
+                        Action::Interact(targ_coords, held_index, interaction) => {
+                            // Process the interaction
+                            // Create a mutable copy of the actor to work with
+
+                            // Process the interaction with direct modification
+                            let (success, message) = ItemBox::process_interaction(
+                                actor,
+                                targ_coords.and_then(|c| {
+                                    let tx = (x as isize + c.0) as usize;
+                                    let ty = (y as isize + c.1) as usize;
+                                    self.get_mut(tx, ty).map(|s| {
                                     println!(
                                         "Actor at ({}, {}) interacting with ({}, {}), item: {:?}",
                                         x,
                                         y,
                                         tx,
                                         ty,
-                                        target_stack.visible_item().map(|(item, _)| &item.item)
+                                        s.visible_item().map(|(item, _)| &item.item)
                                     );
+                                        (s, c.2)
+                                    })
+                                }),
+                                held_index,
+                                interaction,
+                            );
 
-                                    // Process the interaction
-                                    // Create a mutable copy of the actor to work with
+                            // Update the actor with the modified version
+                            if success {
+                                println!("Interaction succeeded: {}", message);
 
-                                    // Process the interaction with direct modification
-                                    let (success, message) = ItemBox::process_interaction(
-                                        actor,
-                                        target_stack,
-                                        tz,
-                                        interaction,
-                                    );
-
-                                    // Update the actor with the modified version
-                                    if success {
-                                        println!("Interaction succeeded: {}", message);
-
-                                        // Replace the actor with the modified version that has updated effects - need to update actor at original position
-                                    } else {
-                                        println!("Interaction failed: {}", message);
-                                    }
-                                    self.update_actor(x, y, actor.clone());
-                                }
+                                // Replace the actor with the modified version that has updated effects - need to update actor at original position
+                            } else {
+                                println!("Interaction failed: {}", message);
                             }
+                            self.update_actor(x, y, actor.clone());
                         }
                         Action::Wait => {
                             // Do nothing
@@ -808,8 +805,11 @@ impl World {
                                 // Food items
                                 Item::Object(Object::Food(_)) => {
                                     if matches!(primary_need.1, Need::Food) {
-                                        let action =
-                                            Action::Interact((rx, ry, *idx), Interaction::Consume);
+                                        let action = Action::Interact(
+                                            Some((rx, ry, *idx)),
+                                            None,
+                                            Interaction::Consume,
+                                        );
                                         if update_if_better(action, primary_need.0) {
                                             // println!(
                                             //     "Found food item for hungry traveler {}",
@@ -818,8 +818,11 @@ impl World {
                                             item_box.think("I'm going to find food".to_string());
                                         }
                                     } else if matches!(primary_need.1, Need::Items) {
-                                        let action =
-                                            Action::Interact((rx, ry, *idx), Interaction::PickUp);
+                                        let action = Action::Interact(
+                                            Some((rx, ry, *idx)),
+                                            None,
+                                            Interaction::PickUp,
+                                        );
                                         update_if_better(action, Priority::Low);
                                         item_box.think("I'm going to pick up food".to_string());
                                     }
@@ -828,8 +831,11 @@ impl World {
                                 // Water
                                 Item::Water | Item::DeepWater => {
                                     if matches!(primary_need.1, Need::Water) {
-                                        let action =
-                                            Action::Interact((rx, ry, *idx), Interaction::Consume);
+                                        let action = Action::Interact(
+                                            Some((rx, ry, *idx)),
+                                            None,
+                                            Interaction::Consume,
+                                        );
                                         if update_if_better(action, primary_need.0) {
                                             // println!("Found water for thirsty traveler {}", name);
                                             item_box
@@ -841,8 +847,11 @@ impl World {
                                 // Corpses (can be eaten when very hungry)
                                 Item::Corpse { .. } => {
                                     if matches!(primary_need.1, Need::Food) {
-                                        let action =
-                                            Action::Interact((rx, ry, *idx), Interaction::Consume);
+                                        let action = Action::Interact(
+                                            Some((rx, ry, *idx)),
+                                            None,
+                                            Interaction::Consume,
+                                        );
                                         if update_if_better(action, primary_need.0) {
                                             // println!("Found corpse for hungry traveler {}", name);
                                             item_box
@@ -854,8 +863,11 @@ impl World {
                                 // Collectible items
                                 Item::Object(_) => {
                                     if matches!(primary_need.1, Need::Items) {
-                                        let action =
-                                            Action::Interact((rx, ry, *idx), Interaction::PickUp);
+                                        let action = Action::Interact(
+                                            Some((rx, ry, *idx)),
+                                            None,
+                                            Interaction::PickUp,
+                                        );
                                         update_if_better(action, Priority::Low);
                                         item_box.think("I want to pick this up".to_string());
                                     }
@@ -892,8 +904,11 @@ impl World {
                                         );
                                         item_box.think("I'm going to mate!".to_string());
 
-                                        let action =
-                                            Action::Interact((rx, ry, *idx), Interaction::Mate);
+                                        let action = Action::Interact(
+                                            Some((rx, ry, *idx)),
+                                            None,
+                                            Interaction::Mate,
+                                        );
                                         update_if_better(action, Priority::Liesure);
                                     }
                                 }
@@ -909,8 +924,8 @@ impl World {
                 }
 
                 // Drop babies
-                if !item_box.tired()
-                    && item_box.effects.iter().any(|e| {
+                if !item_box.tired() {
+                    if let Some(pos) = item_box.effects.iter().position(|e| {
                         matches!(
                             e.kind,
                             EffectType::Holding(ItemBox {
@@ -918,9 +933,24 @@ impl World {
                                 effects: _,
                             })
                         )
-                    })
-                {
-                    return Action::Interact((0, 0, 0), Interaction::Drop);
+                    }) {
+                        return Action::Interact(Some((0, 0, 0)), Some(pos), Interaction::Drop);
+                    }
+                }
+
+                // Eat held food
+                if matches!(primary_need.1, Need::Food) {
+                    if let Some(pos) = item_box.effects.iter().position(|e| {
+                        matches!(
+                            e.kind,
+                            EffectType::Holding(ItemBox {
+                                item: Item::Object(Object::Food(_)),
+                                effects: _,
+                            })
+                        )
+                    }) {
+                        return Action::Interact(None, Some(pos), Interaction::Consume);
+                    }
                 }
 
                 // If we didn't find an action in immediate surroundings, try A* pathfinding
@@ -1076,8 +1106,6 @@ impl World {
                     let new_dir = directions[fastrand::usize(0..directions.len())];
 
                     item_box.prefer_direction(Some(new_dir));
-                    // Can't set direction here because self is immutable
-                    // Direction will be set on next tick
                     new_dir
                 };
                 if primary_need.0 > Priority::Normal {
