@@ -229,7 +229,7 @@ impl World {
             beach_level: 0.36,        // Adjusted beach level
             elevation_amplitude: 1.3, // Higher amplitude for more dramatic terrain
 
-            river_count: 15,  // More rivers
+            river_count: 20,  // More rivers
             river_width: 0.5, // Slightly thinner rivers
         };
 
