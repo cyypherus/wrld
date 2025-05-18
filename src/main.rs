@@ -10,6 +10,7 @@ use entity::effect::{
 use entity::item::Item;
 use pixels::Error;
 use render::{Renderer, TextRenderer};
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use winit::{
@@ -33,6 +34,13 @@ const TARGET_FPS: u64 = 30;
 // Base simulation speed
 const BASE_SIMULATION_SPEED: u64 = 25; // 100% speed
 static SIMULATION_SPEED: AtomicU64 = AtomicU64::new(BASE_SIMULATION_SPEED);
+
+// View modes
+const VIEW_MODE_ALL: u8 = 0;
+const VIEW_MODE_ACTORS: u8 = 1;
+const VIEW_MODE_FOOD: u8 = 2;
+const VIEW_MODE_ITEMS: u8 = 3;
+static VIEW_MODE: AtomicU8 = AtomicU8::new(VIEW_MODE_ALL);
 
 const DEFAULT_HEALTH: u32 = 100;
 
@@ -85,6 +93,7 @@ fn main() -> Result<(), Error> {
     // Simulation state
     let mut paused = false;
     let mut current_speed = BASE_SIMULATION_SPEED;
+    let mut current_view_mode = VIEW_MODE_ALL;
 
     // Create a simple text renderer that writes directly to pixel buffer
     let mut text_renderer = TextRenderer::new();
@@ -118,6 +127,29 @@ fn main() -> Result<(), Error> {
                 current_speed = current_speed.saturating_sub(25).max(25); // Minimum 25% speed
                 SIMULATION_SPEED.store(current_speed, Ordering::Relaxed);
                 println!("Simulation speed: {}%", current_speed);
+                window.request_redraw();
+            }
+
+            // Toggle view mode with number keys
+            if input.key_pressed(VirtualKeyCode::Key1) {
+                current_view_mode = VIEW_MODE_ALL;
+                VIEW_MODE.store(current_view_mode, Ordering::Relaxed);
+                println!("View mode: All (default)");
+                window.request_redraw();
+            } else if input.key_pressed(VirtualKeyCode::Key2) {
+                current_view_mode = VIEW_MODE_ACTORS;
+                VIEW_MODE.store(current_view_mode, Ordering::Relaxed);
+                println!("View mode: Actors only");
+                window.request_redraw();
+            } else if input.key_pressed(VirtualKeyCode::Key3) {
+                current_view_mode = VIEW_MODE_FOOD;
+                VIEW_MODE.store(current_view_mode, Ordering::Relaxed);
+                println!("View mode: Food only");
+                window.request_redraw();
+            } else if input.key_pressed(VirtualKeyCode::Key4) {
+                current_view_mode = VIEW_MODE_ITEMS;
+                VIEW_MODE.store(current_view_mode, Ordering::Relaxed);
+                println!("View mode: Items only");
                 window.request_redraw();
             }
 
@@ -171,17 +203,28 @@ fn main() -> Result<(), Error> {
         // Main game loop
         match event {
             Event::RedrawRequested(_) => {
-                // Render the world
-                renderer.render(&world);
+                // Render the world with current view mode
+                renderer.render(&world, VIEW_MODE.load(Ordering::Relaxed));
 
                 // Draw paused status if needed
-                // Draw simulation status (paused/speed)
+                // Draw simulation status (paused/speed) and view mode
+                let view_mode_text = match current_view_mode {
+                    VIEW_MODE_ALL => "All (1)",
+                    VIEW_MODE_ACTORS => "Actors Only (2)",
+                    VIEW_MODE_FOOD => "Food Only (3)",
+                    VIEW_MODE_ITEMS => "Items Only (4)",
+                    _ => "Unknown",
+                };
+
                 let status_text = if paused {
-                    format!("PAUSED - Press SPACE to resume - Speed: {}%", current_speed)
+                    format!(
+                        "PAUSED - Press SPACE to resume - Speed: {}% - View: {}",
+                        current_speed, view_mode_text
+                    )
                 } else {
                     format!(
-                        "Speed: {}% - Use UP/DOWN arrows to adjust, SPACE to pause",
-                        current_speed
+                        "Speed: {}% - Use UP/DOWN arrows to adjust, SPACE to pause - View: {}",
+                        current_speed, view_mode_text
                     )
                 };
 

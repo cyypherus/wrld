@@ -64,12 +64,157 @@ impl Renderer {
                         // Add the item name with index
                         info.push_str(&format!("  {}. {}\n", index + 1, item_box.get_name()));
 
+                        // Add detailed entity information based on type
+                        match &item_box.item {
+                            Item::Traveler { name } => {
+                                info.push_str(&format!("     Type: Traveler ({})\n", name));
+                                info.push_str(
+                                    "     Role: Autonomous entity that needs food and water\n",
+                                );
+                            }
+                            Item::Corpse { name, item_type } => {
+                                info.push_str(&format!("     Type: Corpse of {}\n", name));
+                                match item_type {
+                                    crate::entity::item::CorpseType::Traveler => {
+                                        info.push_str("     Details: Remains of a traveler (can be consumed in emergencies)\n");
+                                    }
+                                    crate::entity::item::CorpseType::Animal(species) => {
+                                        info.push_str(&format!("     Details: Remains of a {} (can be consumed for food)\n", species));
+                                    }
+                                }
+                            }
+                            Item::Object(obj) => {
+                                info.push_str(&format!("     Type: Object ({})\n", obj));
+                                match obj {
+                                    crate::entity::effect::Object::Food(_) => {
+                                        let (health, hunger, thirst) = item_box.nutrition();
+                                        info.push_str(&format!("     Food Stats: +{}% health, -{}% hunger, -{}% thirst\n",
+                                            health, hunger, thirst));
+                                    }
+                                    crate::entity::effect::Object::Weapon(weapon_type) => {
+                                        info.push_str(&format!(
+                                            "     Weapon Type: {:?}\n",
+                                            weapon_type
+                                        ));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            Item::Water => {
+                                info.push_str(
+                                    "     Type: Water (drinkable, reduces thirst completely)\n",
+                                );
+                                info.push_str(
+                                    "     Terrain: Can be traversed but slows movement\n",
+                                );
+                            }
+                            Item::DeepWater => {
+                                info.push_str("     Type: Deep Water (drinkable, reduces thirst completely)\n");
+                                info.push_str(
+                                    "     Terrain: Difficult to traverse without swimming skill\n",
+                                );
+                            }
+                            Item::Road { connected } => {
+                                info.push_str(&format!(
+                                    "     Type: Road (connected: {})\n",
+                                    connected
+                                ));
+                                info.push_str("     Terrain: Fastest travel path for entities\n");
+                            }
+                            _ => {
+                                // For any terrain type, add terrain cost information
+                                let mut terrain_desc = String::new();
+                                match &item_box.item {
+                                    Item::Dirt => terrain_desc = "Easy to traverse".to_string(),
+                                    Item::Grass => terrain_desc = "Easy to traverse".to_string(),
+                                    Item::Sand => {
+                                        terrain_desc = "Somewhat slows movement".to_string()
+                                    }
+                                    Item::Snow => {
+                                        terrain_desc = "Significantly slows movement".to_string()
+                                    }
+                                    Item::Log => {
+                                        terrain_desc = "Obstacle, difficult to cross".to_string()
+                                    }
+                                    Item::Rock => {
+                                        terrain_desc =
+                                            "Obstacle, very difficult to cross".to_string()
+                                    }
+                                    Item::Mountain => {
+                                        terrain_desc =
+                                            "Major obstacle, extremely difficult to cross"
+                                                .to_string()
+                                    }
+                                    _ => {}
+                                }
+
+                                if !terrain_desc.is_empty() {
+                                    info.push_str(&format!("     Terrain: {}\n", terrain_desc));
+                                }
+                            }
+                        }
+
                         // Add effects if there are any
                         if !item_box.effects.is_empty() {
                             info.push_str("     Effects:\n");
                             for effect in &item_box.effects {
-                                info.push_str(&format!("       • {}\n", effect.description()));
+                                // Enhanced effect description with intensity and duration
+                                let mut effect_desc = format!(
+                                    "       • {} - Intensity: {}%",
+                                    effect.kind, effect.intensity
+                                );
+
+                                // Add duration information if available
+                                if let Some(duration) = &effect.duration {
+                                    let seconds = duration;
+                                    if *seconds > 60 {
+                                        let minutes = seconds / 60;
+                                        effect_desc.push_str(&format!(
+                                            ", Duration: {}m {}s",
+                                            minutes,
+                                            seconds % 60
+                                        ));
+                                    } else {
+                                        effect_desc.push_str(&format!(", Duration: {}s", seconds));
+                                    }
+                                } else {
+                                    effect_desc.push_str(" (Permanent)");
+                                }
+
+                                // Add effect description based on type
+                                match &effect.kind {
+                                    crate::entity::effect::EffectType::Healthy => {
+                                        effect_desc.push_str(" - Health level");
+                                    }
+                                    crate::entity::effect::EffectType::Hungry => {
+                                        let hunger_status = match effect.intensity {
+                                            0..=20 => "Well fed",
+                                            21..=40 => "Satisfied",
+                                            41..=60 => "Hungry",
+                                            61..=80 => "Very hungry",
+                                            _ => "Starving",
+                                        };
+                                        effect_desc.push_str(&format!(" - {}", hunger_status));
+                                    }
+                                    crate::entity::effect::EffectType::Thirsty => {
+                                        let thirst_status = match effect.intensity {
+                                            0..=20 => "Hydrated",
+                                            21..=40 => "Content",
+                                            41..=60 => "Thirsty",
+                                            61..=80 => "Very thirsty",
+                                            _ => "Dehydrated",
+                                        };
+                                        effect_desc.push_str(&format!(" - {}", thirst_status));
+                                    }
+                                    crate::entity::effect::EffectType::Skilled(_skill) => {
+                                        effect_desc.push_str(" - Enables special abilities");
+                                    }
+                                    _ => {}
+                                }
+
+                                info.push_str(&format!("{}\n", effect_desc));
                             }
+
                             // Add a blank line after effects for better readability
                             if index < visible_items.len() - 1 {
                                 info.push('\n');
@@ -101,8 +246,14 @@ impl Renderer {
         self.hover_info.clone()
     }
 
-    /// Render the world
-    pub fn render(&mut self, world: &World) {
+    /// Render the world with the specified view mode filter
+    ///
+    /// View modes:
+    /// 0 - All entities (default)
+    /// 1 - Actors only (travelers and animals)
+    /// 2 - Food only
+    /// 3 - Items only (non-food objects)
+    pub fn render(&mut self, world: &World, view_mode: u8) {
         let width = world.width();
         let height = world.height();
         let buffer_width = self.pixels.texture().width() as usize;
@@ -123,7 +274,38 @@ impl Renderer {
                 if let Some(stack) = world.get(x, y) {
                     // Get the most visible non-air item in the stack
                     let item = stack.visible_item().map(|i| i.0);
-                    let color = item.map(|i| i.get_color()).unwrap_or(Color::TRANSPARENT);
+
+                    // Apply view mode filtering
+                    let filtered_item = match view_mode {
+                        1 => {
+                            // VIEW_MODE_ACTORS
+                            item.filter(|item_box| matches!(item_box.item, Item::Traveler { .. }))
+                        }
+                        2 => {
+                            // VIEW_MODE_FOOD
+                            item.filter(|item_box| {
+                                matches!(
+                                    item_box.item,
+                                    Item::Object(crate::entity::effect::Object::Food(_))
+                                )
+                            })
+                        }
+                        3 => {
+                            // VIEW_MODE_ITEMS
+                            item.filter(|item_box| {
+                                matches!(item_box.item, Item::Object(_))
+                                    && !matches!(
+                                        item_box.item,
+                                        Item::Object(crate::entity::effect::Object::Food(_))
+                                    )
+                            })
+                        }
+                        _ => item, // VIEW_MODE_ALL (default)
+                    };
+
+                    let color = filtered_item
+                        .map(|i| i.get_color())
+                        .unwrap_or(Color::TRANSPARENT);
 
                     // Draw a cell_size x cell_size square
                     for cy in 0..self.cell_size {

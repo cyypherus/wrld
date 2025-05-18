@@ -120,13 +120,89 @@ impl ItemBox {
         Self { item, effects }
     }
 
-    pub fn heal(&mut self, health_boost: u32) {
+    pub fn health(&mut self) -> u32 {
+        if let Some(health) = self
+            .effects
+            .iter_mut()
+            .find(|e| matches!(e.kind, EffectType::Healthy))
+        {
+            return health.intensity;
+        }
+        0
+    }
+    pub fn heal(&mut self, health_boost: i32) {
         if let Some(healing_effect) = self
             .effects
             .iter_mut()
             .find(|e| matches!(e.kind, EffectType::Healthy))
         {
-            healing_effect.intensity += health_boost;
+            if health_boost.is_positive() {
+                healing_effect.intensity =
+                    healing_effect.intensity.saturating_add(health_boost as u32);
+            } else {
+                healing_effect.intensity = healing_effect
+                    .intensity
+                    .saturating_sub(health_boost.unsigned_abs());
+            }
+        }
+    }
+    pub fn eat(&mut self, amount: i32) {
+        if let Some(hunger) = self
+            .effects
+            .iter_mut()
+            .find(|e| matches!(e.kind, EffectType::Hungry))
+        {
+            if amount.is_positive() {
+                hunger.intensity = hunger.intensity.saturating_sub(amount as u32);
+            } else {
+                hunger.intensity = hunger.intensity.saturating_add(amount.unsigned_abs());
+            }
+        }
+    }
+    pub fn thirst(&mut self) -> u32 {
+        if let Some(thirst) = self
+            .effects
+            .iter_mut()
+            .find(|e| matches!(e.kind, EffectType::Thirsty))
+        {
+            return thirst.intensity;
+        }
+        0
+    }
+    pub fn drink(&mut self, amount: i32) {
+        if let Some(thirst) = self
+            .effects
+            .iter_mut()
+            .find(|e| matches!(e.kind, EffectType::Thirsty))
+        {
+            if amount.is_positive() {
+                thirst.intensity = thirst.intensity.saturating_sub(amount as u32);
+            } else {
+                thirst.intensity = thirst.intensity.saturating_add(amount.unsigned_abs());
+            }
+        }
+    }
+    pub fn quench(&mut self) {
+        if let Some(thirst) = self
+            .effects
+            .iter_mut()
+            .find(|e| matches!(e.kind, EffectType::Thirsty))
+        {
+            thirst.intensity = 0;
+        }
+    }
+    /// health, hunger, thirst
+    pub fn nutrition(&self) -> (i32, i32, i32) {
+        match &self.item {
+            Item::Dirt | Item::Grass | Item::Sand | Item::Log => (-1, 1, -1),
+            Item::Water | Item::DeepWater => (0, 0, 100),
+            Item::Snow => (-5, 0, 20),
+            Item::Traveler { .. } => (10, 40, 10),
+            Item::Corpse { .. } => (2, 40, 5),
+            Item::Object(Object::Food(FoodType::Bread)) => (40, 60, 10),
+            Item::Object(Object::Food(FoodType::Fruit)) => (30, 40, 20),
+            Item::Object(Object::Food(FoodType::Vegetable)) => (30, 40, 20),
+            _ => (0, 0, 0),
         }
     }
 }
@@ -484,214 +560,18 @@ impl ItemBox {
         // Process the interaction based on type
         match interaction {
             Interaction::Consume => {
-                // Handle consuming an item (like eating food)
-                // Check if the consumer is attempting to eat a corpse
-                if let Item::Corpse { name, item_type } = &item.item {
-                    // Consume the corpse for a mix of health, hunger, and thirst benefits
-                    let (health_boost, hunger_reduction, thirst_reduction) = match item_type {
-                        CorpseType::Traveler => (10, 80, 10), // Consuming a traveler is less healthy but very filling
-                        CorpseType::Animal(_) => (30, 60, 20), // Animal corpses provide more nutrition
-                    };
-
-                    actor.heal(health_boost);
-
-                    // Get current hunger level
-                    let current_hunger = actor
-                        .effects
-                        .iter()
-                        .find(|e| matches!(e.kind, EffectType::Hungry))
-                        .map_or(100, |e| e.intensity);
-
-                    // Reduce hunger (bounded at 0)
-                    let new_hunger = current_hunger.saturating_sub(hunger_reduction);
-
-                    // Update hunger effect or add it if not present
-                    if let Some(idx) = actor
-                        .effects
-                        .iter()
-                        .position(|e| matches!(e.kind, EffectType::Hungry))
-                    {
-                        actor.effects[idx] = Effect::permanent(EffectType::Hungry, new_hunger);
-                    } else {
-                        actor
-                            .effects
-                            .push(Effect::permanent(EffectType::Hungry, new_hunger));
-                    }
-
-                    // Get current thirst level
-                    let current_thirst = actor
-                        .effects
-                        .iter()
-                        .find(|e| matches!(e.kind, EffectType::Thirsty))
-                        .map_or(100, |e| e.intensity);
-
-                    // Reduce thirst (bounded at 0)
-                    let new_thirst = current_thirst.saturating_sub(thirst_reduction);
-
-                    // Update thirst effect or add it if not present
-                    if let Some(idx) = actor
-                        .effects
-                        .iter()
-                        .position(|e| matches!(e.kind, EffectType::Thirsty))
-                    {
-                        actor.effects[idx] = Effect::permanent(EffectType::Thirsty, new_thirst);
-                    } else {
-                        actor
-                            .effects
-                            .push(Effect::permanent(EffectType::Thirsty, new_thirst));
-                    }
-
-                    println!(
-                        "Corpse consumption: Hunger {}->{}%, Thirst {}->{}%",
-                        current_hunger, new_hunger, current_thirst, new_thirst
-                    );
+                if item.nutrition().2 > 0 {
+                    actor.heal(item.nutrition().0);
+                    actor.eat(item.nutrition().1);
+                    actor.drink(item.nutrition().2);
 
                     return (
                         true,
                         format!(
-                            "Consumed the corpse of {} and gained {}% health",
-                            name, health_boost
-                        ),
-                    );
-                } else if let Item::Traveler { name } = &item.item {
-                    // We're trying to consume a living traveler! This is only possible if they're dead
-                    if item
-                        .effects
-                        .iter()
-                        .any(|effect| matches!(effect.kind, EffectType::Dead))
-                    {
-                        // They're dead, consume them for nutrition
-                        actor.heal(10);
-
-                        // Reduce hunger significantly
-                        let current_hunger = actor
-                            .effects
-                            .iter()
-                            .find(|e| matches!(e.kind, EffectType::Hungry))
-                            .map_or(100, |e| e.intensity);
-
-                        // Reduce hunger
-                        let new_hunger = current_hunger.saturating_sub(80);
-
-                        // Update hunger effect
-                        if let Some(idx) = actor
-                            .effects
-                            .iter()
-                            .position(|e| matches!(e.kind, EffectType::Hungry))
-                        {
-                            actor.effects[idx] = Effect::permanent(EffectType::Hungry, new_hunger);
-                        } else {
-                            actor
-                                .effects
-                                .push(Effect::permanent(EffectType::Hungry, new_hunger));
-                        }
-
-                        return (true, format!("Consumed {} who was dead", name));
-                    } else {
-                        return (
-                            false,
-                            format!("Cannot consume {} - they are still alive!", name),
-                        );
-                    }
-                } else if let Item::Object(Object::Food(food_type)) = &item.item {
-                    let (health_boost, hunger_reduction, thirst_reduction) = match food_type {
-                        FoodType::Bread => (40, 60, 10),
-                        FoodType::Fruit => (30, 40, 20),
-                        FoodType::Vegetable => (30, 50, 15),
-                    };
-
-                    actor.heal(health_boost);
-
-                    // Get current hunger level
-                    let current_hunger = actor
-                        .effects
-                        .iter()
-                        .find(|e| matches!(e.kind, EffectType::Hungry))
-                        .map_or(100, |e| e.intensity);
-
-                    // Reduce hunger (bounded at 0)
-                    let new_hunger = current_hunger.saturating_sub(hunger_reduction);
-
-                    // Update hunger effect
-                    if let Some(idx) = actor
-                        .effects
-                        .iter()
-                        .position(|e| matches!(e.kind, EffectType::Hungry))
-                    {
-                        actor.effects[idx] = Effect::permanent(EffectType::Hungry, new_hunger);
-                    } else {
-                        actor
-                            .effects
-                            .push(Effect::permanent(EffectType::Hungry, new_hunger));
-                    }
-
-                    // Get current thirst level
-                    let current_thirst = actor
-                        .effects
-                        .iter()
-                        .find(|e| matches!(e.kind, EffectType::Thirsty))
-                        .map_or(100, |e| e.intensity);
-
-                    // Reduce thirst (bounded at 0)
-                    let new_thirst = current_thirst.saturating_sub(thirst_reduction);
-
-                    // Update thirst effect
-                    if let Some(idx) = actor
-                        .effects
-                        .iter()
-                        .position(|e| matches!(e.kind, EffectType::Thirsty))
-                    {
-                        actor.effects[idx] = Effect::permanent(EffectType::Thirsty, new_thirst);
-                    } else {
-                        actor
-                            .effects
-                            .push(Effect::permanent(EffectType::Thirsty, new_thirst));
-                    }
-
-                    println!(
-                        "Food consumption: Hunger {}->{}%, Thirst {}->{}%",
-                        current_hunger, new_hunger, current_thirst, new_thirst
-                    );
-
-                    return (
-                        true,
-                        format!(
-                            "Consumed {} and gained {}% health, reduced hunger by {}%, thirst by {}%",
+                            "Consumed {} and gained {}% health",
                             item.get_name(),
-                            health_boost,
-                            hunger_reduction,
-                            thirst_reduction
+                            item.nutrition().1
                         ),
-                    );
-                }
-
-                // Handle drinking water
-                if matches!(item.item, Item::Water | Item::DeepWater) {
-                    // Get current thirst level
-                    let current_thirst = actor
-                        .effects
-                        .iter()
-                        .find(|e| matches!(e.kind, EffectType::Thirsty))
-                        .map_or(100, |e| e.intensity);
-
-                    // Update thirst effect to completely reset thirst
-                    if let Some(idx) = actor
-                        .effects
-                        .iter()
-                        .position(|e| matches!(e.kind, EffectType::Thirsty))
-                    {
-                        actor.effects[idx] = Effect::permanent(EffectType::Thirsty, 0);
-                    } else {
-                        actor
-                            .effects
-                            .push(Effect::permanent(EffectType::Thirsty, 0));
-                    }
-
-                    println!("Water consumption: Thirst {}->0%", current_thirst);
-
-                    return (
-                        true,
-                        format!("Drank water and quenched thirst ({}->0%)", current_thirst),
                     );
                 }
 
@@ -710,7 +590,7 @@ impl ItemBox {
                         return (true, format!("Dropped {}", name));
                     }
                 }
-                return (false, "No item to drop".to_string());
+                (false, "No item to drop".to_string())
             }
             Interaction::PickUp => {
                 // Handle picking up an item
@@ -723,10 +603,6 @@ impl ItemBox {
 
                         target.pop();
                         (true, format!("Picked up {}", item.get_name()))
-                    }
-                    Item::Corpse { name, .. } => {
-                        // Pick up corpse (we could add a special effect for carrying corpses)
-                        (true, format!("Picked up corpse of {}", name))
                     }
                     _ => (false, "No item to pick up".to_string()),
                 }
