@@ -1,14 +1,20 @@
+use noise::Perlin;
+use noise::core::perlin::perlin_2d;
+use noise::permutationtable::{NoiseHasher, PermutationTable};
+
 use crate::entity::effect::{Effect, EffectType, FoodType, Object};
 use crate::entity::item::{
     self, Action, CorpseType, Direction, Interaction, Item, ItemBox, Need, Priority,
 };
 use crate::world::town_gen::TownGenerator;
-use crate::world::world_gen::{WorldGenParams, WorldGenerator};
-use crate::{DEFAULT_HEALTH, FOOD_SPAWN_RATE};
+
+use crate::{DEFAULT_HEALTH, FOOD_SPAWN_RATE, FluidSim};
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fmt;
+
+use super::world_gen::WorldGenerator;
 
 // Node for A* pathfinding
 #[derive(Clone, Eq, PartialEq)]
@@ -39,15 +45,12 @@ pub struct ItemStack {
 
 impl ItemStack {
     pub fn new() -> Self {
-        ItemStack {
-            items: vec![ItemBox::new(Item::Air)], // Default to having just air
-        }
+        ItemStack { items: vec![] }
     }
 
-    /// Create a stack with a base item and air on top
     pub fn with_base(base: Item) -> Self {
         ItemStack {
-            items: vec![ItemBox::new(base), ItemBox::new(Item::Air)],
+            items: vec![ItemBox::new(base)],
         }
     }
 
@@ -77,10 +80,9 @@ impl ItemStack {
     }
 
     /// Replace the top item with a new one
-    pub fn replace_top(&mut self, item: ItemBox) -> ItemBox {
-        let old = self.items.pop().unwrap_or(ItemBox::new(Item::Air));
+    pub fn replace_top(&mut self, item: ItemBox) {
+        self.items.pop();
         self.items.push(item);
-        old
     }
 
     /// Get all items in the stack
@@ -93,16 +95,8 @@ impl ItemStack {
         self.items.iter_mut().find(|item_box| item_box.can_act())
     }
 
-    /// Get the most visible non-air item in the stack
-    pub fn visible_item(&self) -> Option<(&ItemBox, usize)> {
-        // Look through the stack from top to bottom to find a non-air item
-        for (index, item_box) in self.items.iter().enumerate().rev() {
-            match item_box.item {
-                Item::Air => continue,               // Skip air
-                _ => return Some((item_box, index)), // Return the first non-air item
-            }
-        }
-        None
+    pub fn visible_item(&self) -> Option<(usize, &ItemBox)> {
+        self.items.last().map(|item| (self.items.len() - 1, item))
     }
 }
 
@@ -123,7 +117,8 @@ impl fmt::Debug for ItemStack {
 pub struct World {
     width: usize,
     height: usize,
-    grid: Vec<Vec<ItemStack>>,
+    pub(crate) grid: Vec<Vec<ItemStack>>,
+    pub(crate) elevation_grid: Vec<Vec<u8>>,
     seed: u64,
 }
 
@@ -143,6 +138,7 @@ impl World {
             width,
             height,
             grid,
+            elevation_grid: vec![vec![0; width]; height],
             seed,
         }
     }
@@ -218,31 +214,32 @@ impl World {
     }
 
     /// Generate a procedural world using advanced terrain generation
-    pub fn generate(&mut self) {
-        // Configure parameters for the world generator
-        let params = WorldGenParams {
-            seed: self.seed,
-            elevation_scale: 0.06,    // Lower scale for larger features
-            moisture_scale: 0.05,     // Lower scale for moisture patterns
-            vegetation_scale: 0.12,   // Lower scale for vegetation patterns
-            sea_level: 0.32,          // Higher sea level for more islands
-            beach_level: 0.36,        // Adjusted beach level
-            elevation_amplitude: 1.3, // Higher amplitude for more dramatic terrain
+    pub fn generate(&mut self, fluid_sim: &mut FluidSim) {
+        let mut generator = WorldGenerator;
 
-            river_count: 20,  // More rivers
-            river_width: 0.5, // Slightly thinner rivers
-        };
+        let mut elevation_grid = vec![vec![0; self.width]; self.height];
+        fluid_sim.to_elevation(&mut elevation_grid);
 
-        // Create generator with custom parameters
-        let mut generator = WorldGenerator::with_params(params);
+        let pt = PermutationTable::new(self.seed as u32);
 
-        // Generate the world grid
-        self.grid = generator.generate(self.width, self.height);
+        // Apply perlin noise overlay to the elevation grid
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let noise_value = perlin_2d([x as f64 * 0.05, y as f64 * 0.05], &pt);
 
-        // Generate towns and roads
+                // Convert noise from [-1, 1] to [0, 255] range and add to elevation
+                let noise_offset = ((noise_value + 1.) * 20.) as u8;
+                elevation_grid[y][x] = elevation_grid[y][x]
+                    .saturating_sub(10)
+                    .saturating_add(noise_offset);
+            }
+        }
+
+        let grid = generator.generate(&elevation_grid, self.width, self.height);
+        self.grid = grid;
+        self.elevation_grid = elevation_grid;
+
         self.generate_settlements();
-
-        // Add food items (fruits & vegetables) to the world
         self.add_food_items();
     }
 
@@ -311,7 +308,7 @@ impl World {
     }
 
     /// Get immediate surroundings (3x3 grid) around a position
-    pub fn get_surroundings(&self, x: usize, y: usize) -> Vec<Vec<Option<(&ItemBox, usize)>>> {
+    pub fn get_surroundings(&self, x: usize, y: usize) -> Vec<Vec<Option<(usize, &ItemBox)>>> {
         let mut surroundings = Vec::with_capacity(3);
 
         for dy in -1..=1 {
@@ -386,7 +383,7 @@ impl World {
 
             // Check if we've reached the target
             if let Some(stack) = self.get(current_x, current_y) {
-                if let Some((item_box, _)) = stack.visible_item() {
+                if let Some((_, item_box)) = stack.visible_item() {
                     if is_target(item_box) {
                         // Reconstruct and return the path
                         let mut path = vec![current.position];
@@ -448,7 +445,7 @@ impl World {
                 let is_target_item = self
                     .get(nx, ny)
                     .and_then(|stack| stack.visible_item())
-                    .is_none_or(|(box_item, _)| is_target(box_item));
+                    .is_none_or(|(_, box_item)| is_target(box_item));
 
                 // Skip impassable terrain (unless it's the target)
                 if !self.is_passable(nx, ny) && !is_target_item {
@@ -525,7 +522,7 @@ impl World {
     // Get the terrain cost for pathfinding (lower is better)
     fn get_terrain_cost(&self, x: usize, y: usize) -> usize {
         if let Some(stack) = self.get(x, y) {
-            if let Some((item_box, _)) = stack.visible_item() {
+            if let Some((_, item_box)) = stack.visible_item() {
                 match &item_box.item {
                     // Road is best for travel
                     Item::Road { .. } => 1,
@@ -672,7 +669,7 @@ impl World {
                                         y,
                                         tx,
                                         ty,
-                                        s.visible_item().map(|(item, _)| &item.item)
+                                        s.visible_item().map(|(_, item)| &item.item)
                                     );
                                         (s, c.2)
                                     })
@@ -761,7 +758,7 @@ impl World {
         &self,
         item_box: &mut ItemBox,
         effects: &[Effect],
-        surroundings: &[Vec<Option<(&ItemBox, usize)>>],
+        surroundings: &[Vec<Option<(usize, &ItemBox)>>],
         x: usize,
         y: usize,
     ) -> Action {
@@ -789,7 +786,7 @@ impl World {
                         let ry = y_idx as isize - 1;
 
                         // Check the item at this position
-                        if let Some((target_item, idx)) = cell {
+                        if let Some((idx, target_item)) = cell {
                             // Helper to update best action if it has higher priority or same with lower distance
                             let mut update_if_better = |action, priority| {
                                 if priority > best_priority {
@@ -974,7 +971,7 @@ impl World {
                                 // Calculate terrain type for the next step
                                 let terrain_type =
                                     if let Some(stack) = self.get(next_step.0, next_step.1) {
-                                        if let Some((item_box, _)) = stack.visible_item() {
+                                        if let Some((_, item_box)) = stack.visible_item() {
                                             format!("{:?}", item_box.item)
                                         } else {
                                             "unknown".to_string()
@@ -1026,7 +1023,7 @@ impl World {
                                 // Calculate terrain type for the next step
                                 let terrain_type =
                                     if let Some(stack) = self.get(next_step.0, next_step.1) {
-                                        if let Some((item_box, _)) = stack.visible_item() {
+                                        if let Some((_, item_box)) = stack.visible_item() {
                                             format!("{:?}", item_box.item)
                                         } else {
                                             "unknown".to_string()
@@ -1338,7 +1335,7 @@ impl World {
         // Check if the destination contains any non-traversable items
         if self.grid[new_y][new_x]
             .visible_item()
-            .map(|i| !i.0.is_traversable())
+            .map(|i| !i.1.is_traversable())
             .unwrap_or(true)
         {
             return false;
@@ -1391,7 +1388,7 @@ impl fmt::Debug for World {
                 write!(
                     f,
                     "{} ",
-                    stack.visible_item().map(|i| i.0.get_char()).unwrap_or(' ')
+                    stack.visible_item().map(|i| i.1.get_char()).unwrap_or(' ')
                 )?;
             }
             writeln!(f)?;

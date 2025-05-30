@@ -1,9 +1,6 @@
-use std::cell;
-
 use crate::entity::item::{Color, Item};
 use crate::world::World;
 use pixels::{Pixels, SurfaceTexture};
-use winit::dpi::PhysicalPosition;
 use winit::window::Window;
 
 /// Responsible for rendering the world to a pixel buffer
@@ -53,16 +50,11 @@ impl Renderer {
                 info.push_str("Items:\n");
 
                 let items = stack.items();
-                let visible_items: Vec<_> = items
-                    .iter()
-                    .rev()
-                    .filter(|item_box| !matches!(item_box.item, Item::Air))
-                    .collect();
 
-                if visible_items.is_empty() {
+                if items.is_empty() {
                     info.push_str("  <empty>\n");
                 } else {
-                    for (index, item_box) in visible_items.iter().enumerate() {
+                    for (index, item_box) in items.iter().enumerate() {
                         // Add the item name with index
                         info.push_str(&format!("  {}. {}\n", index + 1, item_box.get_name()));
 
@@ -239,7 +231,7 @@ impl Renderer {
                             }
 
                             // Add a blank line after effects for better readability
-                            if index < visible_items.len() - 1 {
+                            if index < items.len() - 1 {
                                 info.push('\n');
                             }
                         }
@@ -276,6 +268,7 @@ impl Renderer {
     /// 1 - Actors only (travelers and animals)
     /// 2 - Food only
     /// 3 - Items only (non-food objects)
+    /// 4 - Elevation only
     pub fn render(&mut self, world: &World, view_mode: u8) {
         let width = world.width();
         let height = world.height();
@@ -296,39 +289,45 @@ impl Renderer {
             for x in 0..width {
                 if let Some(stack) = world.get(x, y) {
                     // Get the most visible non-air item in the stack
-                    let item = stack.visible_item().map(|i| i.0);
+                    let item = stack.visible_item().map(|i| i.1);
 
-                    // Apply view mode filtering
-                    let filtered_item = match view_mode {
-                        1 => {
-                            // VIEW_MODE_ACTORS
-                            item.filter(|item_box| matches!(item_box.item, Item::Traveler { .. }))
-                        }
-                        2 => {
-                            // VIEW_MODE_FOOD
-                            item.filter(|item_box| {
-                                matches!(
-                                    item_box.item,
-                                    Item::Object(crate::entity::effect::Object::Food(_))
-                                )
-                            })
-                        }
-                        3 => {
-                            // VIEW_MODE_ITEMS
-                            item.filter(|item_box| {
-                                matches!(item_box.item, Item::Object(_))
-                                    && !matches!(
+                    let color = if view_mode == 4 {
+                        let elevation = world.elevation_grid[y][x];
+                        Color::new(elevation, elevation, elevation, 255)
+                    } else {
+                        // Apply view mode filtering
+                        let filtered_item = match view_mode {
+                            1 => {
+                                // VIEW_MODE_ACTORS
+                                item.filter(|item_box| {
+                                    matches!(item_box.item, Item::Traveler { .. })
+                                })
+                            }
+                            2 => {
+                                // VIEW_MODE_FOOD
+                                item.filter(|item_box| {
+                                    matches!(
                                         item_box.item,
                                         Item::Object(crate::entity::effect::Object::Food(_))
                                     )
-                            })
-                        }
-                        _ => item, // VIEW_MODE_ALL (default)
+                                })
+                            }
+                            3 => {
+                                // VIEW_MODE_ITEMS
+                                item.filter(|item_box| {
+                                    matches!(item_box.item, Item::Object(_))
+                                        && !matches!(
+                                            item_box.item,
+                                            Item::Object(crate::entity::effect::Object::Food(_))
+                                        )
+                                })
+                            }
+                            _ => item, // VIEW_MODE_ALL (default)
+                        };
+                        filtered_item
+                            .map(|i| i.get_color())
+                            .unwrap_or(Color::TRANSPARENT)
                     };
-
-                    let color = filtered_item
-                        .map(|i| i.get_color())
-                        .unwrap_or(Color::TRANSPARENT);
 
                     // Draw a cell_size x cell_size square
                     for cy in 0..self.cell_size {

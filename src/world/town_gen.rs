@@ -1,5 +1,6 @@
 use rand::Rng;
 use rand::SeedableRng;
+use rand::seq::IndexedRandom;
 use rand::seq::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use std::collections::{HashSet, VecDeque};
@@ -237,7 +238,7 @@ impl TownGenerator {
                                         mountain_nearby = true;
                                     }
                                 }
-                                Item::Grass | Item::Dirt => {
+                                Item::Grass | Item::Dirt | Item::Forest => {
                                     // Count flat land for building
                                     if dx.abs() <= 3 && dy.abs() <= 3 {
                                         flat_land_count += 1;
@@ -369,7 +370,6 @@ impl TownGenerator {
 
             // Add road as town center
             stack.push(ItemBox::new(Item::Road { connected: true }));
-            stack.push(ItemBox::new(Item::Air));
         }
 
         // Track all building positions for later road connection
@@ -572,7 +572,6 @@ impl TownGenerator {
 
             // Add the building and air on top
             stack.push(ItemBox::new(building));
-            stack.push(ItemBox::new(Item::Air));
         }
     }
 
@@ -838,9 +837,6 @@ impl TownGenerator {
                             } else {
                                 stack.push(ItemBox::new(Item::Road { connected: true }));
                             }
-
-                            // Add air back on top
-                            stack.push(ItemBox::new(Item::Air));
                         }
                     }
                 }

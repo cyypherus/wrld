@@ -32,6 +32,7 @@ impl Color {
     pub const YELLOW: Color = Color::new(255, 255, 0, 255);
     pub const BROWN: Color = Color::new(139, 69, 19, 255);
     pub const GRASS_GREEN: Color = Color::new(76, 187, 23, 255);
+    pub const FOREST_GREEN: Color = Color::new(34, 139, 34, 255);
     pub const WATER_BLUE: Color = Color::new(28, 163, 236, 255);
     pub const DEEP_WATER_BLUE: Color = Color::new(0, 105, 148, 255);
     pub const SAND_COLOR: Color = Color::new(237, 201, 175, 255);
@@ -349,9 +350,9 @@ pub enum Need {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     // Environment items
-    Air,
     Dirt,
     Grass,
+    Forest,
     Water,
     DeepWater,
     Sand,
@@ -379,9 +380,9 @@ pub enum Item {
 impl std::fmt::Display for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Item::Air => write!(f, "Air"),
             Item::Dirt => write!(f, "Dirt"),
             Item::Grass => write!(f, "Grass"),
+            Item::Forest => write!(f, "Forest"),
             Item::Water => write!(f, "Water"),
             Item::DeepWater => write!(f, "Deep Water"),
             Item::Sand => write!(f, "Sand"),
@@ -476,9 +477,9 @@ impl ItemBox {
     /// Get the display character for the item
     pub fn get_char(&self) -> char {
         match &self.item {
-            Item::Air => ' ',
             Item::Dirt => '.',
             Item::Grass => '"',
+            Item::Forest => 'ƒ',
             Item::Water => '~',
             Item::DeepWater => '≈',
             Item::Sand => ',',
@@ -509,9 +510,9 @@ impl ItemBox {
     /// Get the color for rendering the item
     pub fn get_color(&self) -> Color {
         match &self.item {
-            Item::Air => Color::TRANSPARENT,
             Item::Dirt => Color::DIRT_COLOR,
             Item::Grass => Color::GRASS_GREEN,
+            Item::Forest => Color::FOREST_GREEN,
             Item::Water => Color::WATER_BLUE,
             Item::DeepWater => Color::DEEP_WATER_BLUE,
             Item::Sand => Color::SAND_COLOR,
@@ -543,9 +544,9 @@ impl ItemBox {
     pub fn get_name(&self) -> String {
         let effects = self.effects.clone();
         match &self.item {
-            Item::Air => "Air".to_string(),
             Item::Dirt => "Dirt".to_string(),
             Item::Grass => "Grass".to_string(),
+            Item::Forest => "Forest".to_string(),
             Item::Water => "Water".to_string(),
             Item::DeepWater => "Deep Water".to_string(),
             Item::Sand => "Sand".to_string(),
@@ -649,9 +650,9 @@ impl ItemBox {
 
     pub fn is_traversable(&self) -> bool {
         match &self.item {
-            Item::Air => false,
             Item::Dirt => true,
             Item::Grass => true,
+            Item::Forest => true,
             Item::Water => true,
             Item::DeepWater => false,
             Item::Sand => true,

@@ -1,539 +1,194 @@
 use crate::entity::item::{Item, ItemBox};
 use crate::world::world::ItemStack;
-use noise::{NoiseFn, Perlin};
-use rand::{Rng, SeedableRng};
+use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 
-/// Contains all parameters for world generation
-pub struct WorldGenParams {
-    /// Seed for the world generation
-    pub seed: u64,
-    /// Controls the frequency of the noise function for elevation
-    pub elevation_scale: f64,
-    /// Controls the frequency of the noise function for moisture
-    pub moisture_scale: f64,
-    /// Controls the frequency of the noise function for vegetation
-    pub vegetation_scale: f64,
-    /// Sea level threshold (values below this are water)
-    pub sea_level: f64,
-    /// Beach level threshold (values just above sea level are beaches)
-    pub beach_level: f64,
-    /// Controls how much the elevation changes
-    pub elevation_amplitude: f64,
-    /// Controls how many rivers are attempted to be placed
-    pub river_count: usize,
-    /// Controls how wide rivers are
-    pub river_width: f64,
-}
-
-/// A complete world generator that uses multiple noise functions to create realistic terrain
-pub struct WorldGenerator {
-    params: WorldGenParams,
-    elevation_noise: Perlin,
-    moisture_noise: Perlin,
-    vegetation_noise: Perlin,
-    feature_noise: Perlin,
-    rng: ChaCha8Rng,
-}
+pub(crate) struct WorldGenerator;
 
 impl WorldGenerator {
-    /// Create a new world generator with custom parameters
-    pub fn with_params(params: WorldGenParams) -> Self {
-        let seed = params.seed;
-        WorldGenerator {
-            params,
-            elevation_noise: Perlin::new(seed as u32),
-            moisture_noise: Perlin::new((seed.wrapping_add(1)) as u32),
-            vegetation_noise: Perlin::new((seed.wrapping_add(2)) as u32),
-            feature_noise: Perlin::new((seed.wrapping_add(3)) as u32),
-            rng: ChaCha8Rng::seed_from_u64(seed),
-        }
-    }
-
-    /// Generate terrain for a world grid
-    pub fn generate(&mut self, width: usize, height: usize) -> Vec<Vec<ItemStack>> {
+    pub fn generate(
+        &mut self,
+        elevation_grid: &Vec<Vec<u8>>,
+        width: usize,
+        height: usize,
+    ) -> Vec<Vec<ItemStack>> {
         let mut grid = vec![vec![ItemStack::new(); width]; height];
-
-        // First pass: generate base terrain (elevation and water)
-        self.generate_base_terrain(&mut grid, width, height);
-
-        // Second pass: add rivers
-        self.generate_rivers(&mut grid, width, height);
-
-        // Third pass: add vegetation and features based on moisture and elevation
-        self.generate_features(&mut grid, width, height);
-
+        self.generate_features(&mut grid, &elevation_grid, width, height);
         grid
     }
 
-    /// Generate base terrain including elevation and water
-    fn generate_base_terrain(
+    fn generate_features(
         &mut self,
         grid: &mut Vec<Vec<ItemStack>>,
+        elevation_grid: &Vec<Vec<u8>>,
         width: usize,
         height: usize,
     ) {
-        // Calculate the center of the map for island-centric generation
-        let center_x = width as f64 / 2.0;
-        let center_y = height as f64 / 2.0;
-        let max_distance = (center_x.powi(2) + center_y.powi(2)).sqrt();
+        const DEEP_WATER: u8 = 20;
+        const WATER: u8 = 45;
+        const SAND: u8 = 50;
+        const GRASS: u8 = 60;
+        const FOREST: u8 = 100;
+        const MOUNTAIN: u8 = 130;
 
         for y in 0..height {
             for x in 0..width {
-                // Calculate distance from center (normalized 0-1)
-                let dx = x as f64 - center_x;
-                let dy = y as f64 - center_y;
-                let distance = (dx.powi(2) + dy.powi(2)).sqrt() / max_distance;
-
-                // Generate various noise values
-                let nx = x as f64 * self.params.elevation_scale;
-                let ny = y as f64 * self.params.elevation_scale;
-
-                // Create base elevation using Perlin noise
-                let mut elevation = self.elevation_noise.get([nx, ny]) * 0.5 + 0.5;
-
-                // Add a second octave of noise for more varied terrain
-                let detail_elevation = self.elevation_noise.get([nx * 2.0, ny * 2.0]) * 0.25 + 0.25;
-                elevation = (elevation + detail_elevation) / 1.25;
-
-                // Apply island falloff to make land centered with water around edges
-                let falloff = (1.0 - distance.powf(2.2)).max(0.0);
-                elevation = (elevation * falloff * self.params.elevation_amplitude).min(1.0);
-
-                // Generate moisture level
-                let moisture = self.moisture_noise.get([
-                    x as f64 * self.params.moisture_scale,
-                    y as f64 * self.params.moisture_scale,
-                ]) * 0.5
-                    + 0.5;
-
-                // Determine the base item based on elevation
-                let base_item = if elevation < self.params.sea_level - 0.15 {
-                    // Deep water areas
-                    Item::Sand // Seabed
-                } else if elevation < self.params.sea_level {
-                    // Shallow water areas
-                    Item::Sand // Seabed
-                } else if elevation < self.params.beach_level {
-                    // Beach areas
-                    Item::Sand
-                } else {
-                    // Land areas
-                    Item::Dirt
-                };
-
-                // Create the stack with the base item
-                let mut stack = ItemStack::with_base(base_item);
-
-                // Add the top item based on elevation and moisture
-                if elevation < self.params.sea_level - 0.15 {
-                    // Deep water areas
-                    stack.push(ItemBox::new(Item::DeepWater));
-                } else if elevation < self.params.sea_level {
-                    // Shallow water areas
-                    stack.push(ItemBox::new(Item::Water));
-                } else if elevation < self.params.beach_level {
-                    // Beach areas, occasionally add rocks
-                    if self.feature_noise.get([nx * 3.0, ny * 3.0]) > 0.85 {
-                        stack.push(ItemBox::new(Item::Rock));
-                    }
-                } else if elevation > 0.9 {
-                    // Mountain peaks with snow
-                    stack.push(ItemBox::new(Item::Mountain));
-                    stack.push(ItemBox::new(Item::Snow));
-                } else if elevation > 0.80 {
-                    // Mountain areas
-                    stack.push(ItemBox::new(Item::Mountain));
-                } else if elevation > 0.70 {
-                    // Rocky elevated areas
-                    stack.push(ItemBox::new(Item::Rock));
-                } else {
-                    // Regular land, add vegetation based on moisture
-                    if moisture > 0.7 {
-                        // Very moist areas get grass and occasional logs (forest)
-                        stack.push(ItemBox::new(Item::Grass));
-                        if self.feature_noise.get([nx * 5.0, ny * 5.0]) > 0.8 {
-                            stack.push(ItemBox::new(Item::Log));
-                        }
-                    } else if moisture > 0.4 {
-                        // Moderately moist areas get grass
-                        stack.push(ItemBox::new(Item::Grass));
-                    } else if moisture > 0.3 {
-                        // Dry areas sometimes get grass
-                        if self.feature_noise.get([nx * 2.0, ny * 2.0]) > 0.5 {
-                            stack.push(ItemBox::new(Item::Grass));
-                        }
-                    }
-                    // Arid areas are just dirt
-                }
-
-                // Always top with air
-                stack.push(ItemBox::new(Item::Air));
-
-                // Set the stack in the grid
-                grid[y][x] = stack;
-            }
-        }
-    }
-
-    /// Generate rivers using path finding from mountains to the sea
-    fn generate_rivers(&mut self, grid: &mut Vec<Vec<ItemStack>>, width: usize, height: usize) {
-        // Find the highest points (potential river sources)
-        let mut potential_sources = Vec::new();
-
-        for y in 0..height {
-            for x in 0..width {
-                let nx = x as f64 * self.params.elevation_scale;
-                let ny = y as f64 * self.params.elevation_scale;
-                let elevation = self.elevation_noise.get([nx, ny]) * 0.5 + 0.5;
-
-                if elevation > 0.75 {
-                    potential_sources.push((x, y, elevation));
-                }
-            }
-        }
-
-        // Sort by elevation descending
-        potential_sources.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
-
-        // Limit to the desired number of rivers
-        let river_count = self.params.river_count.min(potential_sources.len());
-
-        for i in 0..river_count {
-            if let Some(&(x, y, _)) = potential_sources.get(i) {
-                self.create_river(grid, width, height, x, y);
-            }
-        }
-    }
-
-    /// Create a river starting from a source point, flowing downhill to the sea
-    fn create_river(
-        &mut self,
-        grid: &mut Vec<Vec<ItemStack>>,
-        width: usize,
-        height: usize,
-        start_x: usize,
-        start_y: usize,
-    ) {
-        let mut river_points = Vec::new();
-        let mut current_x = start_x;
-        let mut current_y = start_y;
-        let mut reached_water = false;
-
-        // Follow the steepest downhill path until reaching water or the edge
-        while !reached_water
-            && current_x > 0
-            && current_x < width - 1
-            && current_y > 0
-            && current_y < height - 1
-        {
-            river_points.push((current_x, current_y));
-
-            // Look at all neighbors to find the lowest elevation
-            let mut lowest_elevation = 2.0; // Higher than possible noise value
-            let mut next_x = current_x;
-            let mut next_y = current_y;
-
-            for dy in -1..=1 {
-                for dx in -1..=1 {
-                    if dx == 0 && dy == 0 {
-                        continue; // Skip current position
-                    }
-
-                    let nx = (current_x as isize + dx) as usize;
-                    let ny = (current_y as isize + dy) as usize;
-
-                    if nx < width && ny < height {
-                        let stack = &grid[ny][nx];
-
-                        // Check if this is water (destination)
-                        for item in stack.items() {
-                            if let Item::Water | Item::DeepWater = item.item {
-                                reached_water = true;
-                                next_x = nx;
-                                next_y = ny;
-                                break;
-                            }
-                        }
-
-                        if reached_water {
-                            break;
-                        }
-
-                        // Otherwise, evaluate elevation for next step
-                        let elevation = self.elevation_noise.get([
-                            nx as f64 * self.params.elevation_scale,
-                            ny as f64 * self.params.elevation_scale,
-                        ]) * 0.5
-                            + 0.5;
-
-                        if elevation < lowest_elevation {
-                            lowest_elevation = elevation;
-                            next_x = nx;
-                            next_y = ny;
-                        }
-                    }
-                }
-
-                if reached_water {
-                    break;
-                }
-            }
-
-            // Move to the lowest neighbor
-            current_x = next_x;
-            current_y = next_y;
-
-            // Avoid infinite loops if we can't find a downhill path
-            if river_points.contains(&(current_x, current_y)) {
-                break;
-            }
-        }
-
-        // Add the final water point if we reached water
-        if reached_water {
-            river_points.push((current_x, current_y));
-        }
-
-        // Create the river by adding water to all points along the path
-        for &(x, y) in &river_points {
-            // Use a wider river path based on river_width
-            let river_width = self.params.river_width as isize;
-
-            for dy in -river_width..=river_width {
-                for dx in -river_width..=river_width {
-                    let nx = x as isize + dx;
-                    let ny = y as isize + dy;
-
-                    // Check if in bounds
-                    if nx >= 0 && nx < width as isize && ny >= 0 && ny < height as isize {
-                        let nx = nx as usize;
-                        let ny = ny as usize;
-
-                        // Calculate distance from river center
-                        let distance = ((dx * dx + dy * dy) as f64).sqrt();
-
-                        // Only modify if within river width (with some randomness for natural look)
-                        if distance < self.params.river_width + self.rng.gen_range(-0.3..0.3) {
-                            let stack = &mut grid[ny][nx];
-
-                            // Replace the stack with river terrain
-                            *stack = ItemStack::with_base(Item::Sand);
-                            stack.push(ItemBox::new(Item::Water));
-                            stack.push(ItemBox::new(Item::Air));
-                        }
-                    }
+                let elevation = elevation_grid[y][x];
+                match elevation {
+                    ..DEEP_WATER => grid[y][x].items.push(ItemBox::new(Item::DeepWater)),
+                    DEEP_WATER..WATER => grid[y][x].items.push(ItemBox::new(Item::Water)),
+                    WATER..SAND => grid[y][x].items.push(ItemBox::new(Item::Sand)),
+                    SAND..GRASS => grid[y][x].items.push(ItemBox::new(Item::Grass)),
+                    GRASS..FOREST => grid[y][x].items.push(ItemBox::new(Item::Forest)),
+                    FOREST..MOUNTAIN => grid[y][x].items.push(ItemBox::new(Item::Mountain)),
+                    MOUNTAIN.. => grid[y][x].items.push(ItemBox::new(Item::Snow)),
+                    _ => {}
                 }
             }
         }
     }
+}
 
-    /// Generate features like vegetation, rocks, and logs
-    fn generate_features(&mut self, grid: &mut Vec<Vec<ItemStack>>, width: usize, height: usize) {
-        for y in 0..height {
-            for x in 0..width {
-                let stack = &mut grid[y][x];
+#[derive(Debug)]
+pub(crate) struct FluidSim {
+    sources: Vec<(usize, usize)>,
+    pub(crate) pressure: Vec<Vec<f32>>,
+    velocity_x: Vec<Vec<f32>>,
+    velocity_y: Vec<Vec<f32>>,
+    ambient_angle: f32,
+    ambient_magnitude: f32,
+    width: usize,
+    height: usize,
+}
 
-                // Skip water and mountain tiles
-                let mut skip_tile = false;
-                for item in stack.items() {
-                    match item.item {
-                        Item::Water | Item::DeepWater | Item::Mountain | Item::Snow => {
-                            skip_tile = true;
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
+impl FluidSim {
+    pub(crate) fn new(width: usize, height: usize, rng: &mut ChaCha8Rng) -> Self {
+        let pressure = vec![vec![0.0; width]; height];
+        let velocity_x = vec![vec![0.0; width]; height];
+        let velocity_y = vec![vec![0.0; width]; height];
 
-                if skip_tile {
+        let source_count = 5 + (rng.random::<u8>() % 8);
+        let mut sources = Vec::new();
+        for _ in 0..source_count {
+            sources.push((
+                rng.random::<u8>() as usize % width,
+                rng.random::<u8>() as usize % height,
+            ));
+        }
+
+        let ambient_magnitude = rng.random::<f32>() * 0.04;
+        let ambient_angle = rng.random::<f32>() * 2.0 * std::f32::consts::PI;
+
+        FluidSim {
+            sources,
+            pressure,
+            velocity_x,
+            velocity_y,
+            ambient_angle,
+            ambient_magnitude,
+            width,
+            height,
+        }
+    }
+
+    pub(crate) fn to_elevation(&self, elevation_grid: &mut Vec<Vec<u8>>) {
+        for y in 0..self.height {
+            for x in 0..self.width {
+                elevation_grid[y][x] = (self.pressure[y][x]).min(255.0) as u8;
+            }
+        }
+    }
+
+    pub(crate) fn tick(&mut self, finishing: bool) {
+        let ambient_x = self.ambient_angle.cos() * self.ambient_magnitude;
+        let ambient_y = self.ambient_angle.sin() * self.ambient_magnitude;
+        self.ambient_angle += 0.03; // Slow rotation
+
+        if !finishing {
+            for &(sx, sy) in &self.sources {
+                self.pressure[sy][sx] = 255.0;
+            }
+        }
+
+        let mut new_pressure = self.pressure.clone();
+        let mut new_vx = self.velocity_x.clone();
+        let mut new_vy = self.velocity_y.clone();
+
+        // Fluid simulation constants
+        // const GRADIENT_SCALE: f32 = 0.5;
+        // const PRESSURE_FORCE: f32 = 0.002;
+        // const VELOCITY_DAMPING: f32 = 0.99;
+        // const PRESSURE_DECAY: f32 = 0.99;
+        // const DIVERGENCE_SCALE: f32 = 0.5;
+        // const DIVERGENCE_PRESSURE_FACTOR: f32 = 0.5;
+
+        const GRADIENT_SCALE: f32 = 0.5;
+        const PRESSURE_FORCE: f32 = 0.003;
+        const VELOCITY_DAMPING: f32 = 0.995;
+        const PRESSURE_DECAY: f32 = 0.99;
+        const DIVERGENCE_SCALE: f32 = 0.8;
+        const DIVERGENCE_PRESSURE_FACTOR: f32 = 0.5;
+
+        for y in 1..self.height - 1 {
+            for x in 1..self.width - 1 {
+                if self.sources.contains(&(x, y)) && !finishing {
                     continue;
                 }
 
-                // Get noise values for this position
-                let nx = x as f64 * self.params.vegetation_scale;
-                let ny = y as f64 * self.params.vegetation_scale;
-                let vegetation = self.vegetation_noise.get([nx, ny]) * 0.5 + 0.5;
-                let feature = self.feature_noise.get([nx * 2.0, ny * 2.0]) * 0.5 + 0.5;
-                let detail_feature = self.feature_noise.get([nx * 7.0, ny * 7.0]) * 0.5 + 0.5;
+                let grad_x = (self.pressure[y][x + 1] - self.pressure[y][x - 1]) * GRADIENT_SCALE;
+                let grad_y = (self.pressure[y + 1][x] - self.pressure[y - 1][x]) * GRADIENT_SCALE;
 
-                // Check for existing items
-                let mut has_grass = false;
-                let mut has_rock = false;
-                let mut has_log = false;
+                new_vx[y][x] = (self.velocity_x[y][x] - grad_x * PRESSURE_FORCE + ambient_x)
+                    * VELOCITY_DAMPING;
+                new_vy[y][x] = (self.velocity_y[y][x] - grad_y * PRESSURE_FORCE + ambient_y)
+                    * VELOCITY_DAMPING;
 
-                for item in stack.items() {
-                    match item.item {
-                        Item::Grass => has_grass = true,
-                        Item::Rock => has_rock = true,
-                        Item::Log => has_log = true,
-                        _ => {}
-                    }
+                // Advect pressure using velocity
+                let vx = self.velocity_x[y][x];
+                let vy = self.velocity_y[y][x];
+
+                // Simple backward Euler advection
+                let src_x = x as f32 - vx;
+                let src_y = y as f32 - vy;
+
+                let src_x_i = src_x.floor() as i32;
+                let src_y_i = src_y.floor() as i32;
+
+                if src_x_i >= 0
+                    && src_x_i < (self.width - 1) as i32
+                    && src_y_i >= 0
+                    && src_y_i < (self.height - 1) as i32
+                {
+                    let fx = src_x - src_x_i as f32;
+                    let fy = src_y - src_y_i as f32;
+
+                    let ux = src_x_i as usize;
+                    let uy = src_y_i as usize;
+
+                    // Bilinear interpolation
+                    let p00 = self.pressure[uy][ux];
+                    let p10 = self.pressure[uy][ux + 1];
+                    let p01 = self.pressure[uy + 1][ux];
+                    let p11 = self.pressure[uy + 1][ux + 1];
+
+                    let p0 = p00 * (1.0 - fx) + p10 * fx;
+                    let p1 = p01 * (1.0 - fx) + p11 * fx;
+                    let advected_pressure = p0 * (1.0 - fy) + p1 * fy;
+
+                    new_pressure[y][x] = advected_pressure * PRESSURE_DECAY;
                 }
 
-                // See if we're on a beach
-                let mut is_beach = false;
-                for item in stack.items() {
-                    if let Item::Sand = item.item {
-                        is_beach = true;
-                        break;
-                    }
-                }
-
-                // Add features based on the environment
-                if is_beach {
-                    // Beaches sometimes get rocks
-                    if !has_rock && detail_feature > 0.88 {
-                        stack.pop(); // Remove air
-                        stack.push(ItemBox::new(Item::Rock)); // Add rock
-                        stack.push(ItemBox::new(Item::Air)); // Add air back on top
-                    }
-                } else {
-                    // Regular land
-
-                    // Add grass if there isn't any already and the vegetation level is right
-                    if !has_grass && vegetation > 0.4 && feature < 0.8 {
-                        stack.pop(); // Remove air
-                        stack.push(ItemBox::new(Item::Grass)); // Add grass
-                        stack.push(ItemBox::new(Item::Air)); // Add air back on top
-                    }
-
-                    // Create forest clusters by adding logs
-                    if vegetation > 0.7 && detail_feature > 0.85 && !has_log {
-                        if has_grass {
-                            // Add logs on top of grass
-                            stack.pop(); // Remove air
-                            stack.push(ItemBox::new(Item::Log)); // Add log
-                            stack.push(ItemBox::new(Item::Air)); // Add air back on top
-                        } else {
-                            // Add logs on dirt with no grass
-                            stack.pop(); // Remove air
-                            stack.push(ItemBox::new(Item::Log)); // Add log
-                            stack.push(ItemBox::new(Item::Air)); // Add air back on top
-                        }
-                    }
-
-                    // Add scattered rocks in some areas, especially at higher elevations
-                    if feature > 0.7 && detail_feature > 0.9 && !has_rock && !has_log {
-                        stack.pop(); // Remove air
-                        stack.push(ItemBox::new(Item::Rock)); // Add rock
-                        stack.push(ItemBox::new(Item::Air)); // Add air back on top
-                    }
-                }
+                let div = (self.velocity_x[y][x + 1] - self.velocity_x[y][x - 1]
+                    + self.velocity_y[y + 1][x]
+                    - self.velocity_y[y - 1][x])
+                    * DIVERGENCE_SCALE;
+                new_pressure[y][x] =
+                    (new_pressure[y][x] - div * DIVERGENCE_PRESSURE_FACTOR).max(0.0);
             }
         }
 
-        // Second pass - create coherent features by checking neighboring tiles
-        self.enhance_features(grid, width, height);
-    }
-
-    /// Enhance features by looking at neighboring tiles to create more coherent patterns
-    fn enhance_features(&mut self, grid: &mut Vec<Vec<ItemStack>>, width: usize, height: usize) {
-        // Create a copy of the grid to reference while making changes
-        let grid_copy = grid.clone();
-
-        for y in 1..height - 1 {
-            for x in 1..width - 1 {
-                // Count neighboring features
-                let mut log_count = 0;
-                let mut grass_count = 0;
-                let mut rock_count = 0;
-
-                // Check all 8 neighboring cells
-                for dy in -1..=1 {
-                    for dx in -1..=1 {
-                        if dx == 0 && dy == 0 {
-                            continue; // Skip the current cell
-                        }
-
-                        let nx = (x as isize + dx) as usize;
-                        let ny = (y as isize + dy) as usize;
-
-                        if nx < width && ny < height {
-                            for item in grid_copy[ny][nx].items() {
-                                match item.item {
-                                    Item::Log => log_count += 1,
-                                    Item::Grass => grass_count += 1,
-                                    Item::Rock => rock_count += 1,
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                }
-
-                let stack = &mut grid[y][x];
-
-                // Skip water and mountain tiles
-                let mut skip_tile = false;
-                for item in stack.items() {
-                    match item.item {
-                        Item::Water | Item::DeepWater | Item::Mountain | Item::Snow => {
-                            skip_tile = true;
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-
-                if skip_tile {
-                    continue;
-                }
-
-                // Enhance forests - add logs near other logs
-                if log_count >= 3 {
-                    // Check if we already have a log
-                    let mut has_log = false;
-                    for item in stack.items() {
-                        if let Item::Log = item.item {
-                            has_log = true;
-                            break;
-                        }
-                    }
-
-                    if !has_log && self.rng.gen_range(0.0..1.0) < 0.6 {
-                        stack.pop(); // Remove air
-                        stack.push(ItemBox::new(Item::Log)); // Add log
-                        stack.push(ItemBox::new(Item::Air)); // Add air back on top
-                    }
-                }
-
-                // Enhance grass - add grass near other grass
-                if grass_count >= 5 && log_count < 2 {
-                    // Check if we already have grass
-                    let mut has_grass = false;
-                    for item in stack.items() {
-                        if let Item::Grass = item.item {
-                            has_grass = true;
-                            break;
-                        }
-                    }
-
-                    if !has_grass && self.rng.gen_range(0.0..1.0) < 0.7 {
-                        stack.pop(); // Remove air
-                        stack.push(ItemBox::new(Item::Grass)); // Add grass
-                        stack.push(ItemBox::new(Item::Air)); // Add air back on top
-                    }
-                }
-
-                // Enhance rocky areas - add rocks near other rocks
-                if rock_count >= 2 {
-                    // Check if we already have a rock
-                    let mut has_rock = false;
-                    for item in stack.items() {
-                        if let Item::Rock = item.item {
-                            has_rock = true;
-                            break;
-                        }
-                    }
-
-                    if !has_rock && self.rng.gen_range(0.0..1.0) < 0.4 {
-                        stack.pop(); // Remove air
-                        stack.push(ItemBox::new(Item::Rock)); // Add rock
-                        stack.push(ItemBox::new(Item::Air)); // Add air back on top
-                    }
-                }
-            }
-        }
+        self.pressure = new_pressure;
+        self.velocity_x = new_vx;
+        self.velocity_y = new_vy;
     }
 }

@@ -9,18 +9,21 @@ use entity::effect::{
 };
 use entity::item::Item;
 use pixels::Error;
+use rand::{SeedableRng, rngs};
+use rand_chacha::ChaCha8Rng;
 use render::{Renderer, TextRenderer};
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use winit::dpi::LogicalPosition;
 use winit::{
-    dpi::{LogicalSize, PhysicalPosition},
+    dpi::LogicalSize,
     event::{Event, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
 use winit_input_helper::WinitInputHelper;
+use world::world_gen::FluidSim;
 
 // Size of each grid cell in pixels
 const CELL_SIZE: usize = 8;
@@ -41,6 +44,7 @@ const VIEW_MODE_ALL: u8 = 0;
 const VIEW_MODE_ACTORS: u8 = 1;
 const VIEW_MODE_FOOD: u8 = 2;
 const VIEW_MODE_ITEMS: u8 = 3;
+const VIEW_MODE_ELEVATION: u8 = 4;
 static VIEW_MODE: AtomicU8 = AtomicU8::new(VIEW_MODE_ALL);
 
 const DEFAULT_HEALTH: u32 = 100;
@@ -66,43 +70,35 @@ fn main() -> Result<(), Error> {
     // Create the world with a random seed
     let seed = fastrand::u64(..);
     println!("World Seed: {}", seed);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let mut world = World::new(WORLD_WIDTH, WORLD_HEIGHT, seed);
+    let mut fluid_sim = FluidSim::new(WORLD_WIDTH, WORLD_HEIGHT, &mut rng);
+
+    for _ in 0..300 {
+        fluid_sim.tick(false);
+    }
+    for _ in 0..10 {
+        fluid_sim.tick(true);
+    }
 
     // Generate terrain
     println!("Generating world...");
-    world.generate();
-
-    // Print information about generated towns
-    println!("\nTowns Generated:");
-    for (name, (x, y)) in world.get_towns() {
-        println!("- {} at position ({}, {})", name, x, y);
-    }
-
-    // Add some NPCs
+    world.generate(&mut fluid_sim);
     add_npcs(&mut world, 50);
-
-    // Add additional items to the world
     add_items(&mut world, 50);
 
-    // Create the renderer
     let mut renderer = Renderer::new(&window, WINDOW_WIDTH, WINDOW_HEIGHT, CELL_SIZE)?;
-
-    // Game loop timing
     let mut last_update = Instant::now();
 
-    // Track mouse position for hover information
     let mut mouse_position = None;
     let mut show_info = false;
 
-    // Track DPI scaling factor
     let mut dpi_factor = hidpi_factor;
 
-    // Simulation state
     let mut paused = false;
     let mut current_speed = BASE_SIMULATION_SPEED;
     let mut current_view_mode = VIEW_MODE_ALL;
 
-    // Create a simple text renderer that writes directly to pixel buffer
     let mut text_renderer = TextRenderer::new();
 
     event_loop.run(move |event, _, control_flow| {
@@ -157,6 +153,11 @@ fn main() -> Result<(), Error> {
                 current_view_mode = VIEW_MODE_ITEMS;
                 VIEW_MODE.store(current_view_mode, Ordering::Relaxed);
                 println!("View mode: Items only");
+                window.request_redraw();
+            } else if input.key_pressed(VirtualKeyCode::Key5) {
+                current_view_mode = VIEW_MODE_ELEVATION;
+                VIEW_MODE.store(current_view_mode, Ordering::Relaxed);
+                println!("View mode: Elevation");
                 window.request_redraw();
             }
 
@@ -227,6 +228,7 @@ fn main() -> Result<(), Error> {
                     VIEW_MODE_ACTORS => "Actors Only (2)",
                     VIEW_MODE_FOOD => "Food Only (3)",
                     VIEW_MODE_ITEMS => "Items Only (4)",
+                    VIEW_MODE_ELEVATION => "Elevation Only (5)",
                     _ => "Unknown",
                 };
 
