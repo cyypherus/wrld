@@ -1,7 +1,5 @@
 use std::fmt;
 
-use fastrand::digit;
-
 use super::item::{Direction, ItemBox};
 
 // Forward declaration to avoid circular references
@@ -26,20 +24,12 @@ pub enum FoodType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolType {
     Axe,
-    Pickaxe,
-    Shovel,
     Hammer,
-    Saw,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaterialType {
     Wood,
-    Stone,
-    Metal,
-    Cloth,
-    Leather,
-    Gem,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,32 +37,16 @@ pub enum MaterialType {
 pub enum WeaponType {
     Sword,
     Bow,
-    Axe,
-    Dagger,
-    Staff,
-    Spear,
-    Shield,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClothingType {
     Shirt,
-    Pants,
-    Boots,
-    Gloves,
-    Hat,
-    Cloak,
-    Armor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContainerType {
     Bag,
-    Chest,
-    Bottle,
-    Pouch,
-    Barrel,
-    Crate,
 }
 
 /// Effect that can be applied to entities and items
@@ -91,14 +65,10 @@ pub struct Effect {
 pub enum EffectType {
     // Health effects
     Healthy,
-    Injured,
-    Dead,
 
     // Status effects
     Hungry,
     Thirsty,
-
-    Skilled(Skill),
 
     // Inventory effects
     Holding(ItemBox), // Holding an item
@@ -109,11 +79,12 @@ pub enum EffectType {
 
     Tired,
     Young,
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Skill {
-    Swimming,
+    Lonely,
+
+    Wear,
+
+    PathPlanned(Vec<(usize, usize)>),
 }
 
 impl Effect {
@@ -124,6 +95,20 @@ impl Effect {
             intensity,
             duration,
         }
+    }
+
+    pub fn default_traveler_effects() -> Vec<Effect> {
+        vec![
+            Effect::permanent(EffectType::Healthy, 100),
+            Effect::permanent(EffectType::Hungry, 30),
+            Effect::permanent(EffectType::Thirsty, 30),
+            Effect::permanent(EffectType::Lonely, 0),
+            Effect::temporary(EffectType::Young, 100, 50),
+        ]
+    }
+
+    pub fn default_terrain_effects() -> Vec<Effect> {
+        vec![Effect::permanent(EffectType::Wear, 50)]
     }
 
     /// Create a permanent effect
@@ -145,24 +130,16 @@ impl Effect {
     pub fn update(&mut self) -> bool {
         if let Some(remaining) = &mut self.duration {
             if *remaining == 0 {
-                // Effect has expired
                 return false;
             }
-
-            // Reduce the remaining time
             *remaining -= 1;
         }
-
-        // Effect is still active
         true
     }
-
-    /// Check if the effect is expired
     pub fn is_expired(&self) -> bool {
         if let Some(remaining) = self.duration {
             remaining == 0
         } else {
-            // Permanent effects never expire
             false
         }
     }
@@ -178,44 +155,21 @@ fn item_type_to_string(item_type: &Object) -> String {
         },
         Object::Tool(tool_type) => match tool_type {
             ToolType::Axe => "Axe",
-            ToolType::Pickaxe => "Pickaxe",
-            ToolType::Shovel => "Shovel",
+
             ToolType::Hammer => "Hammer",
-            ToolType::Saw => "Saw",
         },
         Object::Material(material_type) => match material_type {
             MaterialType::Wood => "Wood",
-            MaterialType::Stone => "Stone",
-            MaterialType::Metal => "Metal",
-            MaterialType::Cloth => "Cloth",
-            MaterialType::Leather => "Leather",
-            MaterialType::Gem => "Gem",
         },
         Object::Weapon(weapon_type) => match weapon_type {
             WeaponType::Sword => "Sword",
             WeaponType::Bow => "Bow",
-            WeaponType::Axe => "Battle Axe",
-            WeaponType::Dagger => "Dagger",
-            WeaponType::Staff => "Staff",
-            WeaponType::Spear => "Spear",
-            WeaponType::Shield => "Shield",
         },
         Object::Clothing(clothing_type) => match clothing_type {
             ClothingType::Shirt => "Shirt",
-            ClothingType::Pants => "Pants",
-            ClothingType::Boots => "Boots",
-            ClothingType::Gloves => "Gloves",
-            ClothingType::Hat => "Hat",
-            ClothingType::Cloak => "Cloak",
-            ClothingType::Armor => "Armor",
         },
         Object::Container(container_type) => match container_type {
             ContainerType::Bag => "Bag",
-            ContainerType::Chest => "Chest",
-            ContainerType::Bottle => "Bottle",
-            ContainerType::Pouch => "Pouch",
-            ContainerType::Barrel => "Barrel",
-            ContainerType::Crate => "Crate",
         },
     }
     .to_string()
@@ -231,13 +185,9 @@ impl fmt::Display for EffectType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             EffectType::Healthy => write!(f, "Healthy"),
-            EffectType::Injured => write!(f, "Injured"),
-            EffectType::Dead => write!(f, "Dead"),
             EffectType::Hungry => write!(f, "Hungry"),
             EffectType::Thirsty => write!(f, "Thirsty"),
-            EffectType::Skilled(skill) => match skill {
-                Skill::Swimming => write!(f, "Skilled in Swimming"),
-            },
+
             EffectType::Holding(item) => write!(f, "Holding {}", item),
             EffectType::PreferredDirection(_) => {
                 write!(f, "Preferred Direction")
@@ -245,11 +195,20 @@ impl fmt::Display for EffectType {
             EffectType::Thinking(_) => {
                 write!(f, "Thinking")
             }
+            EffectType::PathPlanned(_) => {
+                write!(f, "Path Planned")
+            }
             EffectType::Tired => {
                 write!(f, "Tired")
             }
             EffectType::Young => {
                 write!(f, "Young")
+            }
+            EffectType::Lonely => {
+                write!(f, "Lonely")
+            }
+            EffectType::Wear => {
+                write!(f, "Wear")
             }
         }
     }

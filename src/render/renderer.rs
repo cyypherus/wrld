@@ -1,3 +1,4 @@
+use crate::ViewMode;
 use crate::entity::item::{Color, Item};
 use crate::world::World;
 use pixels::{Pixels, SurfaceTexture};
@@ -8,7 +9,7 @@ pub struct Renderer {
     pixels: Pixels,
     cell_size: usize,
     hover_position: Option<(usize, usize)>,
-    hover_info: Option<String>,
+    pub hover_info: Option<String>,
 }
 
 impl Renderer {
@@ -72,9 +73,6 @@ impl Renderer {
                                     crate::entity::item::CorpseType::Traveler => {
                                         info.push_str("     Details: Remains of a traveler (can be consumed in emergencies)\n");
                                     }
-                                    crate::entity::item::CorpseType::Animal(species) => {
-                                        info.push_str(&format!("     Details: Remains of a {} (can be consumed for food)\n", species));
-                                    }
                                 }
                             }
                             Item::Object(obj) => {
@@ -98,22 +96,15 @@ impl Renderer {
                                 info.push_str(
                                     "     Type: Water (drinkable, reduces thirst completely)\n",
                                 );
-                                info.push_str(
-                                    "     Terrain: Can be traversed but slows movement\n",
-                                );
                             }
                             Item::DeepWater => {
                                 info.push_str("     Type: Deep Water (drinkable, reduces thirst completely)\n");
-                                info.push_str(
-                                    "     Terrain: Difficult to traverse without swimming skill\n",
-                                );
                             }
                             Item::Road { connected } => {
                                 info.push_str(&format!(
                                     "     Type: Road (connected: {})\n",
                                     connected
                                 ));
-                                info.push_str("     Terrain: Fastest travel path for entities\n");
                             }
                             _ => {}
                         }
@@ -125,7 +116,8 @@ impl Renderer {
                                 // Enhanced effect description with intensity and duration
                                 let mut effect_desc = "         ".to_string();
 
-                                effect_desc.push_str(&format!("{}", effect.kind));
+                                effect_desc
+                                    .push_str(&format!("{} {}", effect.kind, effect.intensity));
 
                                 // Add effect description based on type
                                 match &effect.kind {
@@ -138,19 +130,6 @@ impl Renderer {
                                             _ => "Peak condition",
                                         };
                                         effect_desc.push_str(&format!(" - {}", health_status));
-                                    }
-                                    crate::entity::effect::EffectType::Injured => {
-                                        let injury_severity = match effect.intensity {
-                                            0..=20 => "Minor scratches",
-                                            21..=40 => "Moderate wounds",
-                                            41..=60 => "Serious injuries",
-                                            61..=80 => "Severe trauma",
-                                            _ => "Critical condition",
-                                        };
-                                        effect_desc.push_str(&format!(" - {}", injury_severity));
-                                    }
-                                    crate::entity::effect::EffectType::Dead => {
-                                        effect_desc.push_str(" - Entity is deceased");
                                     }
                                     crate::entity::effect::EffectType::Hungry => {
                                         let hunger_status = match effect.intensity {
@@ -172,21 +151,6 @@ impl Renderer {
                                         };
                                         effect_desc.push_str(&format!(" - {}", thirst_status));
                                     }
-                                    crate::entity::effect::EffectType::Skilled(skill) => {
-                                        match skill {
-                                            crate::entity::effect::Skill::Swimming => {
-                                                let skill_level = match effect.intensity {
-                                                    0..=20 => "Novice swimmer",
-                                                    21..=40 => "Decent swimmer",
-                                                    41..=60 => "Competent swimmer",
-                                                    61..=80 => "Strong swimmer",
-                                                    _ => "Expert swimmer",
-                                                };
-                                                effect_desc
-                                                    .push_str(&format!(" - {}", skill_level));
-                                            }
-                                        }
-                                    }
                                     crate::entity::effect::EffectType::Holding(item) => {
                                         effect_desc.push_str(&format!(
                                             " - Currently holding {}",
@@ -207,6 +171,15 @@ impl Renderer {
                                     }
                                     crate::entity::effect::EffectType::Young => {
                                         effect_desc.push_str(" - Young");
+                                    }
+                                    crate::entity::effect::EffectType::Lonely => {
+                                        effect_desc.push_str(" - Lonely");
+                                    }
+                                    crate::entity::effect::EffectType::Wear => {
+                                        effect_desc.push_str(" - Wear");
+                                    }
+                                    crate::entity::effect::EffectType::PathPlanned(_) => {
+                                        effect_desc.push_str(" - Path Planned");
                                     }
                                 }
 
@@ -250,17 +223,6 @@ impl Renderer {
         }
     }
 
-    /// Clear hover information
-    pub fn clear_hover(&mut self) {
-        self.hover_position = None;
-        self.hover_info = None;
-    }
-
-    /// Get current hover information
-    pub fn get_hover_info(&self) -> Option<String> {
-        self.hover_info.clone()
-    }
-
     /// Render the world with the specified view mode filter
     ///
     /// View modes:
@@ -269,7 +231,7 @@ impl Renderer {
     /// 2 - Food only
     /// 3 - Items only (non-food objects)
     /// 4 - Elevation only
-    pub fn render(&mut self, world: &World, view_mode: u8) {
+    pub fn render(&mut self, world: &World, view_mode: ViewMode) {
         let width = world.width();
         let height = world.height();
         let buffer_width = self.pixels.texture().width() as usize;
@@ -288,45 +250,42 @@ impl Renderer {
         for y in 0..height {
             for x in 0..width {
                 if let Some(stack) = world.get(x, y) {
-                    // Get the most visible non-air item in the stack
                     let item = stack.visible_item().map(|i| i.1);
-
-                    let color = if view_mode == 4 {
-                        let elevation = world.elevation_grid[y][x];
-                        Color::new(elevation, elevation, elevation, 255)
-                    } else {
-                        // Apply view mode filtering
-                        let filtered_item = match view_mode {
-                            1 => {
-                                // VIEW_MODE_ACTORS
-                                item.filter(|item_box| {
-                                    matches!(item_box.item, Item::Traveler { .. })
-                                })
-                            }
-                            2 => {
-                                // VIEW_MODE_FOOD
-                                item.filter(|item_box| {
-                                    matches!(
+                    let color = match view_mode {
+                        ViewMode::Actors => {
+                            // VIEW_MODE_ACTORS
+                            item.filter(|item_box| matches!(item_box.item, Item::Traveler { .. }))
+                                .map(|i| i.get_color())
+                                .unwrap_or(Color::TRANSPARENT)
+                        }
+                        ViewMode::Food => {
+                            // VIEW_MODE_FOOD
+                            item.filter(|item_box| {
+                                matches!(
+                                    item_box.item,
+                                    Item::Object(crate::entity::effect::Object::Food(_))
+                                )
+                            })
+                            .map(|i| i.get_color())
+                            .unwrap_or(Color::TRANSPARENT)
+                        }
+                        ViewMode::Items => {
+                            // VIEW_MODE_ITEMS
+                            item.filter(|item_box| {
+                                matches!(item_box.item, Item::Object(_))
+                                    && !matches!(
                                         item_box.item,
                                         Item::Object(crate::entity::effect::Object::Food(_))
                                     )
-                                })
-                            }
-                            3 => {
-                                // VIEW_MODE_ITEMS
-                                item.filter(|item_box| {
-                                    matches!(item_box.item, Item::Object(_))
-                                        && !matches!(
-                                            item_box.item,
-                                            Item::Object(crate::entity::effect::Object::Food(_))
-                                        )
-                                })
-                            }
-                            _ => item, // VIEW_MODE_ALL (default)
-                        };
-                        filtered_item
+                            })
                             .map(|i| i.get_color())
                             .unwrap_or(Color::TRANSPARENT)
+                        }
+                        ViewMode::All => item.map(|i| i.get_color()).unwrap_or(Color::TRANSPARENT),
+                        ViewMode::Elevation => {
+                            let elevation = world.elevation_grid[y][x];
+                            Color::new(elevation, elevation, elevation, 255)
+                        }
                     };
 
                     // Draw a cell_size x cell_size square

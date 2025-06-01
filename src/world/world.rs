@@ -1,17 +1,11 @@
-use noise::Perlin;
-use noise::core::perlin::perlin_2d;
-use noise::permutationtable::{NoiseHasher, PermutationTable};
-
 use crate::entity::effect::{Effect, EffectType, FoodType, Object};
-use crate::entity::item::{
-    self, Action, CorpseType, Direction, Interaction, Item, ItemBox, Need, Priority,
-};
-use crate::world::town_gen::TownGenerator;
+use crate::entity::item::{Action, Direction, Interaction, Item, ItemBox, Need, Priority};
 
-use crate::{DEFAULT_HEALTH, FOOD_SPAWN_RATE, FluidSim};
+use crate::{FOOD_SPAWN_RATE, FluidSim};
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::f32::consts::PI;
 use std::fmt;
 
 use super::world_gen::WorldGenerator;
@@ -120,6 +114,7 @@ pub struct World {
     pub(crate) grid: Vec<Vec<ItemStack>>,
     pub(crate) elevation_grid: Vec<Vec<u8>>,
     seed: u64,
+    time: u64,
 }
 
 impl World {
@@ -140,6 +135,7 @@ impl World {
             grid,
             elevation_grid: vec![vec![0; width]; height],
             seed,
+            time: 0,
         }
     }
 
@@ -219,27 +215,9 @@ impl World {
 
         let mut elevation_grid = vec![vec![0; self.width]; self.height];
         fluid_sim.to_elevation(&mut elevation_grid);
-
-        let pt = PermutationTable::new(self.seed as u32);
-
-        // Apply perlin noise overlay to the elevation grid
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let noise_value = perlin_2d([x as f64 * 0.05, y as f64 * 0.05], &pt);
-
-                // Convert noise from [-1, 1] to [0, 255] range and add to elevation
-                let noise_offset = ((noise_value + 1.) * 20.) as u8;
-                elevation_grid[y][x] = elevation_grid[y][x]
-                    .saturating_sub(10)
-                    .saturating_add(noise_offset);
-            }
-        }
-
         let grid = generator.generate(&elevation_grid, self.width, self.height);
         self.grid = grid;
         self.elevation_grid = elevation_grid;
-
-        self.generate_settlements();
         self.add_food_items();
     }
 
@@ -284,29 +262,6 @@ impl World {
         println!("Added {} food items to the world", food_placed);
     }
 
-    /// Generate settlements (towns, roads) directly as items in the world
-    fn generate_settlements(&mut self) {
-        // Create town generator with the same seed
-        let mut town_generator = TownGenerator::new(self.seed);
-
-        // Determine how many towns to generate based on world size
-        let min_towns = (self.width * self.height) / 2000;
-        let max_towns = (self.width * self.height) / 1000;
-
-        // Ensure we have at least 3 towns
-        let min_towns = min_towns.max(3);
-        let max_towns = max_towns.max(5);
-
-        // Generate towns directly as items in the grid
-        town_generator.generate(
-            &mut self.grid,
-            self.width,
-            self.height,
-            min_towns,
-            max_towns,
-        );
-    }
-
     /// Get immediate surroundings (3x3 grid) around a position
     pub fn get_surroundings(&self, x: usize, y: usize) -> Vec<Vec<Option<(usize, &ItemBox)>>> {
         let mut surroundings = Vec::with_capacity(3);
@@ -347,6 +302,7 @@ impl World {
         start: (usize, usize),
         is_target: impl Fn(&ItemBox) -> bool,
         max_distance: usize,
+        target_coord: Option<(usize, usize)>,
     ) -> Option<Vec<(usize, usize)>> {
         // Create open and closed sets
         let mut open_set = BinaryHeap::new();
@@ -382,7 +338,22 @@ impl World {
             }
 
             // Check if we've reached the target
-            if let Some(stack) = self.get(current_x, current_y) {
+            if let Some(target) = target_coord {
+                // Check if we've reached the specific target coordinate
+                if (current_x, current_y) == target {
+                    // Reconstruct and return the path
+                    let mut path = vec![current.position];
+                    let mut current_pos = current.position;
+
+                    while let Some(prev) = came_from.get(&current_pos) {
+                        path.push(*prev);
+                        current_pos = *prev;
+                    }
+
+                    path.reverse();
+                    return Some(path);
+                }
+            } else if let Some(stack) = self.get(current_x, current_y) {
                 if let Some((_, item_box)) = stack.visible_item() {
                     if is_target(item_box) {
                         // Reconstruct and return the path
@@ -442,10 +413,15 @@ impl World {
 
                 // Skip if not passable
                 // Allow the target to be found even if it's not normally passable
-                let is_target_item = self
-                    .get(nx, ny)
-                    .and_then(|stack| stack.visible_item())
-                    .is_none_or(|(_, box_item)| is_target(box_item));
+                let is_target_item = if let Some(target) = target_coord {
+                    // If we have a specific target, check if this is it
+                    (nx, ny) == target
+                } else {
+                    // Otherwise use the target predicate
+                    self.get(nx, ny)
+                        .and_then(|stack| stack.visible_item())
+                        .is_none_or(|(_, box_item)| is_target(box_item))
+                };
 
                 // Skip impassable terrain (unless it's the target)
                 if !self.is_passable(nx, ny) && !is_target_item {
@@ -477,10 +453,17 @@ impl World {
                     came_from.insert(neighbor_pos, current.position);
                     g_scores.insert(neighbor_pos, tentative_g_score);
 
-                    // Calculate f_score as g_score only - no heuristic needed since
-                    // we're doing a radial search for any matching target rather than
-                    // a directed search to a specific destination
-                    let f_score = tentative_g_score;
+                    // Calculate f_score based on g_score and heuristic
+                    // If we have a specific target, use Manhattan distance as heuristic
+                    // Otherwise, use g_score only for radial search
+                    let f_score = if let Some(target) = target_coord {
+                        // A* with Manhattan distance heuristic
+                        let h_score = (nx.abs_diff(target.0) + ny.abs_diff(target.1)) as usize;
+                        tentative_g_score + h_score
+                    } else {
+                        // Radial search with no heuristic
+                        tentative_g_score
+                    };
 
                     // Check if this node is already in the open set
                     let in_open_set = open_set.iter().any(|node| node.position == neighbor_pos);
@@ -529,17 +512,18 @@ impl World {
                     Item::Bridge => 1,
 
                     // Land is preferred for walking
-                    Item::Dirt => 10,
-                    Item::Grass => 10,
+                    Item::Dirt => 2,
+                    Item::Grass => 3,
+                    Item::Forest => 7,
                     Item::Sand => 10,
 
                     // Obstacles are much harder to traverse
                     Item::Log => 13,
                     Item::Rock => 15,
-                    Item::Mountain => 30,
+                    Item::Mountain => 15,
 
                     // Water is difficult - travelers prefer to avoid it
-                    Item::Water => 20,
+                    Item::Water => 13,
                     Item::DeepWater => 65, // Almost impassable
 
                     // Snow is slow but easier than water
@@ -598,6 +582,10 @@ impl World {
 
     /// Process one tick of the world, allowing all actors to take their actions
     pub fn tick(&mut self) {
+        self.time += 1;
+        if self.time > 100 {
+            self.time = 0;
+        }
         // Periodically spawn food in the world (adjusted for balance)
         if fastrand::u8(0..100) < FOOD_SPAWN_RATE {
             self.spawn_food();
@@ -619,15 +607,10 @@ impl World {
             }
         }
 
-        // Process actions for each actor
         for (x, y) in actor_positions {
-            // First, gather information about surroundings
             let stack = self.get_mut(x, y).cloned();
             let surroundings = self.get_surroundings(x, y);
 
-            // Then get a mutable reference and determine the action
-            let width = self.width();
-            let height = self.height();
             if let Some(mut stack) = stack {
                 if let Some(actor) = stack.find_actor() {
                     // Skip actors that can't act
@@ -721,34 +704,45 @@ impl World {
 
             // Check if the position has grass (food should grow on grass)
             if let Some(stack) = self.get(x, y) {
-                let has_grass = stack
-                    .items()
-                    .iter()
-                    .any(|item| matches!(item.item, Item::Grass));
-                let has_traveler = stack
-                    .items()
-                    .iter()
-                    .any(|item| matches!(item.item, Item::Traveler { .. }));
-                let has_food = stack
-                    .items()
-                    .iter()
-                    .any(|item| matches!(item.item, Item::Object(Object::Food(_))));
+                if stack.items().iter().any(|item| {
+                    matches!(item.item, Item::Grass | Item::Forest)
+                        && !matches!(item.item, Item::Object(Object::Food(_)))
+                }) {
+                    // Check if there's already food nearby (in a 5x5 area)
+                    let mut food_nearby = false;
+                    for check_y in y.saturating_sub(1)..=y.saturating_add(1) {
+                        for check_x in x.saturating_sub(1)..=x.saturating_add(1) {
+                            if check_x < self.width && check_y < self.height {
+                                if let Some(nearby_stack) = self.get(check_x, check_y) {
+                                    if nearby_stack.items().iter().any(|item| {
+                                        matches!(item.item, Item::Object(Object::Food(_)))
+                                    }) {
+                                        food_nearby = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if food_nearby {
+                            break;
+                        }
+                    }
 
-                // Only spawn food on grass where there isn't already food or a traveler
-                if has_grass && !has_traveler && !has_food {
-                    // Create a random food item
-                    let food_type = match fastrand::usize(0..3) {
-                        0 => FoodType::Bread,
-                        1 => FoodType::Fruit,
-                        _ => FoodType::Vegetable,
-                    };
+                    // Only spawn food if there's no food nearby
+                    if !food_nearby {
+                        let food_type = match fastrand::usize(0..3) {
+                            0 => FoodType::Bread,
+                            1 => FoodType::Fruit,
+                            _ => FoodType::Vegetable,
+                        };
 
-                    let food_item = Item::Object(Object::Food(food_type));
+                        let food_item = Item::Object(Object::Food(food_type));
 
-                    // Add the food to the world
-                    self.add_item(x, y, food_item);
-                    println!("Spawned new food item at ({}, {})", x, y);
-                    return;
+                        // Add the food to the world
+                        self.add_item(x, y, food_item);
+                        // println!("Spawned new food item at ({}, {})", x, y);
+                        return;
+                    }
                 }
             }
         }
@@ -762,154 +756,65 @@ impl World {
         x: usize,
         y: usize,
     ) -> Action {
+        let pathfind_limit = 80;
         match item_box.item.clone() {
             Item::Traveler { name } => {
                 let primary_need = item_box.primary_need();
-                let preferred_direction = item_box.preferred_direction();
-                item_box.prefer_direction(None);
-
-                // ---- 2. Scan surroundings once and act based on priority ----
-
-                // Track the best action found while scanning
                 let mut best_action = None;
-                let mut best_priority = Priority::None;
 
-                // Scan all surrounding cells in a single loop
-                for (y_idx, row) in surroundings.iter().enumerate() {
-                    for (x_idx, cell) in row.iter().enumerate() {
-                        if x_idx == 1 && y_idx == 1 {
-                            continue;
-                        } // Skip center (where NPC is)
+                if primary_need.0 > Priority::Low {
+                    for (y_idx, row) in surroundings.iter().enumerate() {
+                        for (x_idx, cell) in row.iter().enumerate() {
+                            if x_idx == 1 && y_idx == 1 {
+                                continue;
+                            } // Skip center (where NPC is)
 
-                        // Convert to relative coordinates (-1, 0, 1)
-                        let rx = x_idx as isize - 1;
-                        let ry = y_idx as isize - 1;
+                            // Convert to relative coordinates (-1, 0, 1)
+                            let rx = x_idx as isize - 1;
+                            let ry = y_idx as isize - 1;
 
-                        // Check the item at this position
-                        if let Some((idx, target_item)) = cell {
-                            // Helper to update best action if it has higher priority or same with lower distance
-                            let mut update_if_better = |action, priority| {
-                                if priority > best_priority {
-                                    best_action = Some(action);
-                                    best_priority = priority;
-                                    true
-                                } else {
-                                    false
-                                }
-                            };
-
-                            match &target_item.item {
-                                // Food items
-                                Item::Object(Object::Food(_)) => {
-                                    if matches!(primary_need.1, Need::Food) {
-                                        let action = Action::Interact(
+                            if let Some((idx, target_item)) = cell {
+                                best_action = match (&primary_need.1, &target_item.item) {
+                                    (Need::Water, Item::Water | Item::DeepWater) => {
+                                        item_box.think("I'm going to drink this".to_string());
+                                        Some(Action::Interact(
                                             Some((rx, ry, *idx)),
                                             None,
                                             Interaction::Consume,
-                                        );
-                                        if update_if_better(action, primary_need.0) {
-                                            // println!(
-                                            //     "Found food item for hungry traveler {}",
-                                            //     name
-                                            // );
-                                            item_box.think("I'm going to find food".to_string());
-                                        }
-                                    } else if matches!(primary_need.1, Need::Items) {
-                                        let action = Action::Interact(
+                                        ))
+                                    }
+                                    (Need::Food, Item::Object(Object::Food(_))) => {
+                                        item_box.think("I'm going to eat this".to_string());
+                                        Some(Action::Interact(
+                                            Some((rx, ry, *idx)),
+                                            None,
+                                            Interaction::Consume,
+                                        ))
+                                    }
+                                    (Need::Items, Item::Object(_)) => {
+                                        item_box
+                                            .think("I'm going to pick this thing up".to_string());
+                                        Some(Action::Interact(
                                             Some((rx, ry, *idx)),
                                             None,
                                             Interaction::PickUp,
-                                        );
-                                        update_if_better(action, Priority::Low);
-                                        item_box.think("I'm going to pick up food".to_string());
+                                        ))
                                     }
-                                }
-
-                                // Water
-                                Item::Water | Item::DeepWater => {
-                                    if matches!(primary_need.1, Need::Water) {
-                                        let action = Action::Interact(
-                                            Some((rx, ry, *idx)),
-                                            None,
-                                            Interaction::Consume,
-                                        );
-                                        if update_if_better(action, primary_need.0) {
-                                            // println!("Found water for thirsty traveler {}", name);
-                                            item_box
-                                                .think("I'm going to look for water".to_string());
+                                    (Need::Social, Item::Traveler { name }) => {
+                                        if !target_item.young() {
+                                            item_box.think(format!("I want to mate with {}", name));
+                                            Some(Action::Interact(
+                                                Some((rx, ry, *idx)),
+                                                None,
+                                                Interaction::Mate,
+                                            ))
+                                        } else {
+                                            None
                                         }
                                     }
+                                    _ => None,
                                 }
-
-                                // Corpses (can be eaten when very hungry)
-                                Item::Corpse { .. } => {
-                                    if matches!(primary_need.1, Need::Food) {
-                                        let action = Action::Interact(
-                                            Some((rx, ry, *idx)),
-                                            None,
-                                            Interaction::Consume,
-                                        );
-                                        if update_if_better(action, primary_need.0) {
-                                            // println!("Found corpse for hungry traveler {}", name);
-                                            item_box
-                                                .think("I'm going to eat this corpse".to_string());
-                                        }
-                                    }
-                                }
-
-                                // Collectible items
-                                Item::Object(_) => {
-                                    if matches!(primary_need.1, Need::Items) {
-                                        let action = Action::Interact(
-                                            Some((rx, ry, *idx)),
-                                            None,
-                                            Interaction::PickUp,
-                                        );
-                                        update_if_better(action, Priority::Low);
-                                        item_box.think("I want to pick this up".to_string());
-                                    }
-                                }
-
-                                // // Interesting exploration targets
-                                // Item::Grass | Item::Rock | Item::Log => {
-                                //     if matches!(primary_need.1, Need::Exploration) {
-                                //         let direction = match (rx, ry) {
-                                //             (0, -1) => Direction::North,
-                                //             (1, 0) => Direction::East,
-                                //             (0, 1) => Direction::South,
-                                //             (-1, 0) => Direction::West,
-                                //             (1, -1) => Direction::NorthEast,
-                                //             (1, 1) => Direction::SouthEast,
-                                //             (-1, 1) => Direction::SouthWest,
-                                //             (-1, -1) => Direction::NorthWest,
-                                //             _ => Direction::None,
-                                //         };
-
-                                //         if direction != Direction::None {
-                                //             let action = Action::Move(direction);
-                                //             update_if_better(action, Priority::Low);
-                                //             item_box.think("I'm going to explore".to_string());
-                                //         }
-                                //     }
-                                // }
-                                Item::Traveler { name: other_name } => {
-                                    // 30% chance of mating when conditions are right
-                                    if !target_item.young() && fastrand::f32() < 0.30 {
-                                        println!(
-                                            "Traveler {} attempting to mate with {}",
-                                            name, other_name
-                                        );
-                                        item_box.think("I'm going to mate!".to_string());
-
-                                        let action = Action::Interact(
-                                            Some((rx, ry, *idx)),
-                                            None,
-                                            Interaction::Mate,
-                                        );
-                                        update_if_better(action, Priority::Liesure);
-                                    }
-                                }
-                                _ => {}
+                                .or(best_action);
                             }
                         }
                     }
@@ -917,7 +822,26 @@ impl World {
 
                 // If we found a suitable action, return it
                 if let Some(action) = best_action {
+                    item_box.forget_path();
                     return action;
+                }
+
+                if let Some(path) = item_box.planned_path_mut() {
+                    if !path.is_empty() {
+                        if let Some(dir) = path.iter().find_map(|step| {
+                            let dir = self.get_direction_to((x, y), *step);
+                            if dir != Direction::None {
+                                Some(dir)
+                            } else {
+                                None
+                            }
+                        }) {
+                            path.remove(0);
+                            return Action::Move(dir);
+                        }
+                    } else {
+                        item_box.forget_path();
+                    }
                 }
 
                 // Drop babies
@@ -950,169 +874,82 @@ impl World {
                     }
                 }
 
-                // If we didn't find an action in immediate surroundings, try A* pathfinding
-                // Try to find water if that's the primary need
-                if matches!(primary_need.1, Need::Water) && primary_need.0 >= Priority::Urgent {
-                    // Get the current position of the actor
-                    let current_pos = (x, y);
-
-                    let path = self.find_path(
-                        current_pos,
-                        |item_box| matches!(item_box.item, Item::Water | Item::DeepWater),
-                        20,
-                    );
-
-                    if let Some(path) = path {
-                        if path.len() > 1 {
-                            let next_step = path[1]; // First step after current position
-                            let direction = self.get_direction_to(current_pos, next_step);
-
-                            if direction != Direction::None {
-                                // Calculate terrain type for the next step
-                                let terrain_type =
-                                    if let Some(stack) = self.get(next_step.0, next_step.1) {
-                                        if let Some((_, item_box)) = stack.visible_item() {
-                                            format!("{:?}", item_box.item)
-                                        } else {
-                                            "unknown".to_string()
-                                        }
-                                    } else {
-                                        "unknown".to_string()
-                                    };
-
-                                // println!(
-                                //     "Traveler {} found path to water, moving {} (via {})",
-                                //     name,
-                                //     match direction {
-                                //         Direction::North => "north",
-                                //         Direction::East => "east",
-                                //         Direction::South => "south",
-                                //         Direction::West => "west",
-                                //         Direction::NorthEast => "northeast",
-                                //         Direction::SouthEast => "southeast",
-                                //         Direction::SouthWest => "southwest",
-                                //         Direction::NorthWest => "northwest",
-                                //         Direction::None => "nowhere",
-                                //     },
-                                //     terrain_type
-                                // );
-                                item_box.think("I know where to go to find water".to_string());
-                                return Action::Move(direction);
-                            }
-                        }
-                    }
-                }
-
-                // Try to find food if that's the primary need
-                if matches!(primary_need.1, Need::Food) && primary_need.0 >= Priority::Urgent {
-                    // Get the current position of the actor
-                    let current_pos = (x, y);
-
-                    let path = self.find_path(
-                        current_pos,
-                        |item_box| matches!(item_box.item, Item::Object(Object::Food(_))),
-                        20,
-                    );
-
-                    if let Some(path) = path {
-                        if path.len() > 1 {
-                            let next_step = path[1]; // First step after current position
-                            let direction = self.get_direction_to(current_pos, next_step);
-
-                            if direction != Direction::None {
-                                // Calculate terrain type for the next step
-                                let terrain_type =
-                                    if let Some(stack) = self.get(next_step.0, next_step.1) {
-                                        if let Some((_, item_box)) = stack.visible_item() {
-                                            format!("{:?}", item_box.item)
-                                        } else {
-                                            "unknown".to_string()
-                                        }
-                                    } else {
-                                        "unknown".to_string()
-                                    };
-
-                                // println!(
-                                //     "Traveler {} found path to food, moving {} (via {})",
-                                //     name,
-                                //     match direction {
-                                //         Direction::North => "north",
-                                //         Direction::East => "east",
-                                //         Direction::South => "south",
-                                //         Direction::West => "west",
-                                //         Direction::NorthEast => "northeast",
-                                //         Direction::SouthEast => "southeast",
-                                //         Direction::SouthWest => "southwest",
-                                //         Direction::NorthWest => "northwest",
-                                //         Direction::None => "nowhere",
-                                //     },
-                                //     terrain_type
-                                // );
+                if primary_need.0 >= Priority::Urgent {
+                    match primary_need.1 {
+                        Need::Food => {
+                            if let Some(path) = self.find_path(
+                                (x, y),
+                                |item_box| matches!(item_box.item, Item::Object(Object::Food(_))),
+                                pathfind_limit,
+                                None,
+                            ) {
                                 item_box.think("I know where to go to find food".to_string());
-                                return Action::Move(direction);
+                                item_box.forget_path();
+                                item_box.plan_path(path);
+                                return Action::Wait;
                             }
                         }
+                        Need::Water => {
+                            if let Some(path) = self.find_path(
+                                (x, y),
+                                |item_box| matches!(item_box.item, Item::Water | Item::DeepWater),
+                                pathfind_limit,
+                                None,
+                            ) {
+                                item_box.think("I know where to go to find water".to_string());
+                                item_box.forget_path();
+                                item_box.plan_path(path);
+                                return Action::Wait;
+                            }
+                        }
+                        Need::Social => {
+                            if let Some(path) = self.find_path(
+                                (x, y),
+                                |item_box| matches!(item_box.item, Item::Traveler { .. }),
+                                pathfind_limit,
+                                None,
+                            ) {
+                                item_box.think("I know where to go to find a friend".to_string());
+                                item_box.forget_path();
+                                item_box.plan_path(path);
+                                return Action::Wait;
+                            }
+                        }
+                        _ => {}
                     }
                 }
 
-                // If no specific action was determined, move with directional persistence
-                // Get the current persistent direction for this entity
-                let direction = if let Some(dir) = preferred_direction {
-                    // Check if we hit a barrier in that direction
-                    let (nx, ny) = match dir {
-                        Direction::North => (x, y.saturating_sub(1)),
-                        Direction::East => (x + 1, y),
-                        Direction::South => (x, y + 1),
-                        Direction::West => (x.saturating_sub(1), y),
-                        _ => (x, y),
-                    };
-
-                    // Check if the new position is passable
-                    if nx < self.width && ny < self.height && self.is_passable(nx, ny) {
-                        dir
-                    } else {
-                        // Hit a barrier, pick a new random direction
-                        let directions = [
-                            Direction::North,
-                            Direction::East,
-                            Direction::South,
-                            Direction::West,
-                        ];
-
-                        let new_dir = directions[fastrand::usize(0..directions.len())];
-                        println!(
-                            "Traveler {} hit barrier, new direction: {:?}",
-                            name, new_dir
-                        );
-
-                        // Set the new direction for persistence
-                        // Can't set direction here because self is immutable
-                        // Direction will be set on next tick
-                        new_dir
-                    }
-                } else {
-                    // Pick a new random direction and record it
-                    let directions = [
+                if fastrand::f32() > 0.99 {
+                    let explore_dist = 10;
+                    let explore_direction = [
                         Direction::North,
                         Direction::East,
                         Direction::South,
                         Direction::West,
-                    ];
-
-                    // Select a random direction
-                    let new_dir = directions[fastrand::usize(0..directions.len())];
-
-                    item_box.prefer_direction(Some(new_dir));
-                    new_dir
-                };
-                if primary_need.0 > Priority::Normal {
-                    item_box.think("I don't think I can find what I need here".to_string());
+                    ][fastrand::usize(0..4)];
+                    let target = match explore_direction {
+                        Direction::North => (x, y.saturating_sub(explore_dist)),
+                        Direction::East => (x + explore_dist, y),
+                        Direction::South => (x, y + explore_dist),
+                        Direction::West => (x.saturating_sub(explore_dist), y),
+                        _ => unreachable!(),
+                    };
+                    if let Some(path) = self.find_path((x, y), |_| false, 100, Some(target)) {
+                        item_box.forget_path();
+                        item_box.plan_path(path);
+                    }
+                    Action::Wait
                 } else {
-                    item_box.think("I'm going to explore".to_string());
+                    // Action::Move(
+                    //     [
+                    //         Direction::North,
+                    //         Direction::East,
+                    //         Direction::South,
+                    //         Direction::West,
+                    //     ][fastrand::usize(0..4)],
+                    // )
+                    Action::Wait
                 }
-
-                // No need to check validity - movement gets validated elsewhere
-                Action::Move(direction)
             }
             _ => Action::Wait,
         }
@@ -1121,186 +958,88 @@ impl World {
     /// Move an item from one position to another
     // Apply effects over time to all items in the world
     fn apply_effects(&mut self) {
-        // Update all items with effects
+        let time = self.time;
         for y in 0..self.height {
             for x in 0..self.width {
                 if let Some(stack) = self.get_mut(x, y) {
-                    for item_box in stack.items.iter_mut() {
-                        // Update effects that have durations
-                        item_box.effects.retain_mut(|effect| effect.update());
-
-                        // Apply natural effects based on item type
-                        let mut replace_item = Option::<ItemBox>::None;
-                        if let Item::Traveler { name } = &item_box.item {
-                            // Gradually increase hunger and thirst
-                            let mut has_hunger = false;
-                            let mut has_thirst = false;
-                            let mut health_level = 100; // Default health level
-                            let mut hunger_level = 0;
-                            let mut thirst_level = 0;
-
-                            // First pass: gather information about current effects
-                            for effect in &item_box.effects {
-                                match effect.kind {
-                                    EffectType::Hungry => {
-                                        has_hunger = true;
-                                        hunger_level = effect.intensity;
-                                    }
-                                    EffectType::Thirsty => {
-                                        has_thirst = true;
-                                        thirst_level = effect.intensity;
-                                    }
-                                    EffectType::Healthy => {
-                                        health_level = effect.intensity;
-                                    }
-                                    _ => {}
+                    for npc in stack.items.iter_mut() {
+                        npc.effects.retain_mut(|effect| effect.update());
+                        match npc.item {
+                            Item::Traveler { ref name } => {
+                                if npc.health() == 0 {
+                                    npc.die(name.clone());
+                                    return;
+                                };
+                                if npc.hunger() > 100 {
+                                    npc.heal(-1);
+                                }
+                                if npc.thirst() > 100 {
+                                    npc.heal(-1);
+                                }
+                                if time % 2 == 0 {
+                                    npc.eat(-1);
+                                    npc.drink(-1);
+                                }
+                                if time % 20 == 0 && npc.loneliness() < 45 {
+                                    npc.feel_lonely(1);
                                 }
                             }
-
-                            // Second pass: update effect intensities
-                            let effects = item_box.effects.clone();
-                            let mut new_effects = Vec::new();
-                            for effect in &mut item_box.effects {
-                                match effect.kind {
-                                    EffectType::Hungry => {
-                                        // Save old intensity for reporting
-                                        let old_intensity = effect.intensity;
-
-                                        // Increase hunger over time (slower)
-                                        effect.intensity = (effect.intensity + 1).min(100);
-
-                                        // Report significant hunger changes
-                                        if effect.intensity > 80 && old_intensity <= 80 {
-                                            println!(
-                                                "{} is now severely hungry ({}%)",
-                                                name, effect.intensity
-                                            );
-                                        }
-                                    }
-                                    EffectType::Thirsty => {
-                                        // Save old intensity for reporting
-                                        let old_intensity = effect.intensity;
-
-                                        if matches!(effect.kind, EffectType::Thirsty) {
-                                            // Increase thirst over time (faster than hunger)
-                                            effect.intensity = (effect.intensity + 1).min(100);
-                                        }
-
-                                        // Report significant thirst changes
-                                        if effect.intensity > 80 && old_intensity <= 80 {
-                                            println!(
-                                                "{} is now severely thirsty ({}%)",
-                                                name, effect.intensity
-                                            );
-                                        }
-                                    }
-                                    EffectType::Healthy => {
-                                        // Only reduce health if extremely hungry or thirsty
-                                        let mut severe_condition = false;
-
-                                        for other_effect in &effects {
-                                            match other_effect.kind {
-                                                EffectType::Hungry | EffectType::Thirsty
-                                                    if other_effect.intensity > 80 =>
-                                                {
-                                                    severe_condition = true;
-                                                    break;
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-
-                                        if severe_condition && effect.intensity > 0 {
-                                            // Reduce health if starving/dehydrated
-                                            let prev_health = effect.intensity;
-                                            effect.intensity = effect.intensity.saturating_sub(1);
-
-                                            // if prev_health != effect.intensity {
-                                            //     println!(
-                                            //         "{}'s health decreased to {}% (hunger: {}%, thirst: {}%)",
-                                            //         name,
-                                            //         effect.intensity,
-                                            //         hunger_level,
-                                            //         thirst_level
-                                            //     );
-                                            // }
-
-                                            // If health reaches low level, add injured effect
-                                            if effect.intensity < 20
-                                                && !effects
-                                                    .iter()
-                                                    .any(|e| matches!(e.kind, EffectType::Injured))
-                                            {
-                                                new_effects.push(Effect::permanent(
-                                                    EffectType::Injured,
-                                                    50,
-                                                ));
-                                                println!(
-                                                    "{} became injured due to poor health",
-                                                    name
-                                                );
-                                            }
-
-                                            // If health is zero, add dead effect and convert to corpse
-                                            if effect.intensity == 0
-                                                && !effects
-                                                    .iter()
-                                                    .any(|e| matches!(e.kind, EffectType::Dead))
-                                            {
-                                                new_effects
-                                                    .push(Effect::permanent(EffectType::Dead, 100));
-                                                println!(
-                                                    "{} has died due to health reaching zero",
-                                                    name
-                                                );
-
-                                                // Mark for conversion to corpse
-                                                replace_item =
-                                                    Some(ItemBox::new(match &item_box.item {
-                                                        Item::Traveler { name } => Item::Corpse {
-                                                            name: name.clone(),
-                                                            item_type: CorpseType::Traveler,
-                                                        },
-                                                        _ => item_box.item.clone(),
-                                                    }));
-                                            }
-                                        }
-                                    }
-                                    _ => {}
+                            Item::Grass => {
+                                if npc.wear() >= 53 {
+                                    *npc = ItemBox::with_effects(
+                                        Item::Dirt,
+                                        Effect::default_terrain_effects(),
+                                    )
+                                }
+                                if time % 50 == 0 && npc.wear() > 47 {
+                                    npc.wear_down(-1);
                                 }
                             }
-
-                            item_box.effects.extend(new_effects);
-
-                            // Add hunger effect if not present
-                            if !has_hunger {
-                                item_box
-                                    .effects
-                                    .push(Effect::permanent(EffectType::Hungry, 10));
+                            Item::Snow | Item::Mountain | Item::Road { .. } => {
+                                if npc.wear() >= 53 {
+                                    *npc = ItemBox::with_effects(
+                                        Item::Dirt,
+                                        Effect::default_terrain_effects(),
+                                    )
+                                }
+                                if time % 50 == 0 && npc.wear() > 47 {
+                                    npc.wear_down(-1);
+                                }
                             }
-
-                            // Add thirst effect if not present
-                            if !has_thirst {
-                                item_box
-                                    .effects
-                                    .push(Effect::permanent(EffectType::Thirsty, 15));
+                            Item::Forest => {
+                                if npc.wear() >= 53 {
+                                    *npc = ItemBox::with_effects(
+                                        Item::Grass,
+                                        Effect::default_terrain_effects(),
+                                    );
+                                }
+                                if time % 50 == 0 && npc.wear() > 47 {
+                                    npc.wear_down(-1);
+                                }
                             }
-
-                            // Add health effect if not present
-                            if health_level == DEFAULT_HEALTH
-                                && !item_box
-                                    .effects
-                                    .iter()
-                                    .any(|e| matches!(e.kind, EffectType::Healthy))
-                            {
-                                item_box
-                                    .effects
-                                    .push(Effect::permanent(EffectType::Healthy, DEFAULT_HEALTH));
+                            Item::Dirt => {
+                                if npc.wear() <= 47 {
+                                    *npc = ItemBox::with_effects(
+                                        Item::Grass,
+                                        Effect::default_terrain_effects(),
+                                    )
+                                }
+                                if time % 50 == 0 && npc.wear() > 47 {
+                                    npc.wear_down(-1);
+                                }
                             }
-                        }
-
-                        if let Some(replace_item) = replace_item {
-                            *item_box = replace_item;
+                            Item::Water
+                            | Item::DeepWater
+                            | Item::Sand
+                            | Item::Log
+                            | Item::Rock
+                            | Item::Corpse { .. }
+                            | Item::House { .. }
+                            | Item::Shop { .. }
+                            | Item::Tavern { .. }
+                            | Item::Temple { .. }
+                            | Item::Object(_)
+                            | Item::Bridge => (),
                         }
                     }
                 }
@@ -1353,6 +1092,7 @@ impl World {
             {
                 self.grid[y][x].items.remove(index);
 
+                self.grid[new_y][new_x].top_mut().wear_down(5);
                 // Add the actor to the destination stack
                 self.grid[new_y][new_x].push(actor_box);
                 true

@@ -1,7 +1,7 @@
 use crate::{
     entity::effect::{
-        self, ClothingType, ContainerType, Effect, EffectType, FoodType, MaterialType, Object,
-        ToolType, WeaponType,
+        ClothingType, ContainerType, Effect, EffectType, FoodType, MaterialType, Object, ToolType,
+        WeaponType,
     },
     generate_name,
     world::world::ItemStack,
@@ -24,13 +24,6 @@ impl Color {
     }
 
     pub const TRANSPARENT: Color = Color::new(0, 0, 0, 0);
-    pub const BLACK: Color = Color::new(0, 0, 0, 255);
-    pub const WHITE: Color = Color::new(255, 255, 255, 255);
-    pub const RED: Color = Color::new(255, 0, 0, 255);
-    pub const GREEN: Color = Color::new(0, 255, 0, 255);
-    pub const BLUE: Color = Color::new(0, 0, 255, 255);
-    pub const YELLOW: Color = Color::new(255, 255, 0, 255);
-    pub const BROWN: Color = Color::new(139, 69, 19, 255);
     pub const GRASS_GREEN: Color = Color::new(76, 187, 23, 255);
     pub const FOREST_GREEN: Color = Color::new(34, 139, 34, 255);
     pub const WATER_BLUE: Color = Color::new(28, 163, 236, 255);
@@ -42,7 +35,6 @@ impl Color {
     pub const MOUNTAIN_COLOR: Color = Color::new(102, 107, 112, 255);
     pub const SNOW_COLOR: Color = Color::new(230, 230, 250, 255);
     pub const TRAVELER_COLOR: Color = Color::new(255, 69, 0, 255);
-    pub const ANIMAL_COLOR: Color = Color::new(255, 215, 0, 255);
     pub const HOUSE_COLOR: Color = Color::new(165, 42, 42, 255);
     pub const SHOP_COLOR: Color = Color::new(210, 105, 30, 255);
     pub const TAVERN_COLOR: Color = Color::new(139, 69, 19, 255);
@@ -165,6 +157,12 @@ impl ItemBox {
             }
         }
     }
+    pub fn die(&mut self, memorial: String) {
+        *self = ItemBox::new(Item::Corpse {
+            name: memorial,
+            item_type: CorpseType::Traveler,
+        })
+    }
     pub fn eat(&mut self, amount: i32) {
         if let Some(hunger) = self
             .effects
@@ -249,6 +247,54 @@ impl ItemBox {
             .iter()
             .any(|e| matches!(e.kind, EffectType::Young))
     }
+    pub fn feel_lonely(&mut self, amount: i32) {
+        if let Some(lonely) = self
+            .effects
+            .iter_mut()
+            .find(|e| matches!(e.kind, EffectType::Lonely))
+        {
+            if amount.is_positive() {
+                lonely.intensity = lonely.intensity.saturating_add(amount as u32);
+            } else {
+                lonely.intensity = lonely.intensity.saturating_sub(amount.unsigned_abs());
+            }
+        }
+    }
+    pub fn loneliness(&self) -> u32 {
+        if let Some(lonely) = self
+            .effects
+            .iter()
+            .find(|e| matches!(e.kind, EffectType::Lonely))
+        {
+            lonely.intensity
+        } else {
+            0
+        }
+    }
+    pub fn wear(&self) -> u32 {
+        if let Some(wear) = self
+            .effects
+            .iter()
+            .find(|e| matches!(e.kind, EffectType::Wear))
+        {
+            wear.intensity
+        } else {
+            0
+        }
+    }
+    pub fn wear_down(&mut self, amount: i32) {
+        if let Some(wear) = self
+            .effects
+            .iter_mut()
+            .find(|e| matches!(e.kind, EffectType::Wear))
+        {
+            if amount.is_positive() {
+                wear.intensity = wear.intensity.saturating_add(amount as u32);
+            } else {
+                wear.intensity = wear.intensity.saturating_sub(amount.unsigned_abs());
+            }
+        }
+    }
     /// health, hunger, thirst
     pub fn nutrition(&self) -> (i32, i32, i32) {
         match &self.item {
@@ -288,43 +334,41 @@ impl ItemBox {
         }
     }
     pub fn primary_need(&self) -> (Priority, Need) {
-        let mut _health_level = 100;
-        let mut hunger_level = 0;
-        let mut thirst_level = 0;
-
-        // Process all effects to determine the entity's state
-        for effect in &self.effects {
-            match &effect.kind {
-                EffectType::Healthy => {
-                    _health_level = effect.intensity;
-                }
-                EffectType::Hungry => {
-                    hunger_level = effect.intensity;
-                }
-                EffectType::Thirsty => {
-                    thirst_level = effect.intensity;
-                }
-                _ => {}
-            }
+        let mut needs = vec![
+            (self.thirst(), Need::Water),
+            (self.hunger(), Need::Food),
+            (self.loneliness(), Need::Social),
+        ];
+        needs.sort_by(|a, b| b.0.cmp(&a.0));
+        let (intensity, need) = needs.remove(0);
+        match intensity {
+            0..10 => (Priority::None, need),
+            10..20 => (Priority::Liesure, need),
+            20..40 => (Priority::Low, need),
+            40..60 => (Priority::Normal, need),
+            60..80 => (Priority::Urgent, need),
+            _ => (Priority::Critical, need),
         }
-
-        // Determine the primary need and its priority
-        let primary_need: (Priority, Need) = if thirst_level > 80 {
-            (Priority::Critical, Need::Water)
-        } else if hunger_level > 80 {
-            (Priority::Critical, Need::Food)
-        } else if thirst_level > 50 {
-            (Priority::Urgent, Need::Water)
-        } else if hunger_level > 50 {
-            (Priority::Urgent, Need::Food)
-        } else if hunger_level > 30 {
-            (Priority::Normal, Need::Food)
-        } else if fastrand::bool() {
-            (Priority::Low, Need::Items)
-        } else {
-            (Priority::Low, Need::Exploration)
-        };
-        primary_need
+    }
+    pub fn forget_path(&mut self) {
+        self.effects
+            .retain(|e| !matches!(e.kind, EffectType::PathPlanned(_)));
+    }
+    pub fn plan_path(&mut self, path: Vec<(usize, usize)>) {
+        self.effects
+            .push(Effect::permanent(EffectType::PathPlanned(path), 100));
+    }
+    pub fn planned_path(&self) -> Option<&Vec<(usize, usize)>> {
+        self.effects.iter().find_map(|e| match &e.kind {
+            EffectType::PathPlanned(path) => Some(path),
+            _ => None,
+        })
+    }
+    pub fn planned_path_mut(&mut self) -> Option<&mut Vec<(usize, usize)>> {
+        self.effects.iter_mut().find_map(|e| match &mut e.kind {
+            EffectType::PathPlanned(path) => Some(path),
+            _ => None,
+        })
     }
 }
 // Define priority levels for decision making
@@ -343,7 +387,7 @@ pub enum Need {
     Water,
     Food,
     Items,
-    Exploration,
+    Social,
 }
 
 /// All possible items in the world
@@ -394,7 +438,6 @@ impl std::fmt::Display for Item {
 
             Item::Corpse { name, item_type } => match item_type {
                 CorpseType::Traveler => write!(f, "Corpse of {} (Traveler)", name),
-                CorpseType::Animal(species) => write!(f, "Corpse of {} ({})", name, species),
             },
             Item::House { owner } => match owner {
                 Some(name) => write!(f, "{}'s House", name),
@@ -422,44 +465,20 @@ impl std::fmt::Display for Item {
                     },
                     Object::Tool(tool_type) => match tool_type {
                         ToolType::Axe => "Axe",
-                        ToolType::Pickaxe => "Pickaxe",
-                        ToolType::Shovel => "Shovel",
                         ToolType::Hammer => "Hammer",
-                        ToolType::Saw => "Saw",
                     },
                     Object::Material(material_type) => match material_type {
                         MaterialType::Wood => "Wood",
-                        MaterialType::Stone => "Stone",
-                        MaterialType::Metal => "Metal",
-                        MaterialType::Cloth => "Cloth",
-                        MaterialType::Leather => "Leather",
-                        MaterialType::Gem => "Gem",
                     },
                     Object::Weapon(weapon_type) => match weapon_type {
                         WeaponType::Sword => "Sword",
                         WeaponType::Bow => "Bow",
-                        WeaponType::Axe => "Battle Axe",
-                        WeaponType::Dagger => "Dagger",
-                        WeaponType::Staff => "Staff",
-                        WeaponType::Spear => "Spear",
-                        WeaponType::Shield => "Shield",
                     },
                     Object::Clothing(clothing_type) => match clothing_type {
                         ClothingType::Shirt => "Shirt",
-                        ClothingType::Pants => "Pants",
-                        ClothingType::Boots => "Boots",
-                        ClothingType::Gloves => "Gloves",
-                        ClothingType::Hat => "Hat",
-                        ClothingType::Cloak => "Cloak",
-                        ClothingType::Armor => "Armor",
                     },
                     Object::Container(container_type) => match container_type {
                         ContainerType::Bag => "Bag",
-                        ContainerType::Chest => "Chest",
-                        ContainerType::Bottle => "Bottle",
-                        ContainerType::Pouch => "Pouch",
-                        ContainerType::Barrel => "Barrel",
-                        ContainerType::Crate => "Crate",
                     },
                 }
             ),
@@ -470,7 +489,6 @@ impl std::fmt::Display for Item {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CorpseType {
     Traveler,
-    Animal(String), // Species
 }
 
 impl ItemBox {
@@ -560,7 +578,6 @@ impl ItemBox {
 
             Item::Corpse { name, item_type } => match item_type {
                 CorpseType::Traveler => format!("Corpse of {} (Traveler)", name),
-                CorpseType::Animal(species) => format!("Corpse of {} ({})", name, species),
             },
             Item::House { owner } => match owner {
                 Some(name) => format!("{}'s House", name),
@@ -587,44 +604,20 @@ impl ItemBox {
                     },
                     Object::Tool(tool_type) => match tool_type {
                         ToolType::Axe => "Axe",
-                        ToolType::Pickaxe => "Pickaxe",
-                        ToolType::Shovel => "Shovel",
                         ToolType::Hammer => "Hammer",
-                        ToolType::Saw => "Saw",
                     },
                     Object::Material(material_type) => match material_type {
                         MaterialType::Wood => "Wood",
-                        MaterialType::Stone => "Stone",
-                        MaterialType::Metal => "Metal",
-                        MaterialType::Cloth => "Cloth",
-                        MaterialType::Leather => "Leather",
-                        MaterialType::Gem => "Gem",
                     },
                     Object::Weapon(weapon_type) => match weapon_type {
                         WeaponType::Sword => "Sword",
                         WeaponType::Bow => "Bow",
-                        WeaponType::Axe => "Battle Axe",
-                        WeaponType::Dagger => "Dagger",
-                        WeaponType::Staff => "Staff",
-                        WeaponType::Spear => "Spear",
-                        WeaponType::Shield => "Shield",
                     },
                     Object::Clothing(clothing_type) => match clothing_type {
                         ClothingType::Shirt => "Shirt",
-                        ClothingType::Pants => "Pants",
-                        ClothingType::Boots => "Boots",
-                        ClothingType::Gloves => "Gloves",
-                        ClothingType::Hat => "Hat",
-                        ClothingType::Cloak => "Cloak",
-                        ClothingType::Armor => "Armor",
                     },
                     Object::Container(container_type) => match container_type {
                         ContainerType::Bag => "Bag",
-                        ContainerType::Chest => "Chest",
-                        ContainerType::Bottle => "Bottle",
-                        ContainerType::Pouch => "Pouch",
-                        ContainerType::Barrel => "Barrel",
-                        ContainerType::Crate => "Crate",
                     },
                 }
                 .to_string();
@@ -676,13 +669,7 @@ impl ItemBox {
     /// Whether this item can act (NPCs, players, etc)
     pub fn can_act(&self) -> bool {
         match &self.item {
-            Item::Traveler { .. } => {
-                // Only alive entities can act - check if they have a Dead effect
-                !self
-                    .effects
-                    .iter()
-                    .any(|effect| matches!(effect.kind, EffectType::Dead))
-            }
+            Item::Traveler { .. } => true,
             _ => false,
         }
     }
@@ -745,7 +732,7 @@ impl ItemBox {
                 if let Some(held) = held_target {
                     if let EffectType::Holding(dropped) = actor.effects.remove(held).kind {
                         let name = dropped.get_name();
-                        if let Some((target, z)) = target {
+                        if let Some((target, _)) = target {
                             target.push(dropped);
                         }
                         return (true, format!("Dropped {}", name));
@@ -786,18 +773,18 @@ impl ItemBox {
                             if actor.tired() || item.tired() {
                                 return (false, "Actor is too tired to mate".to_string());
                             }
-                            let baby_name = format!("{} {}", generate_name(), mate_name);
+                            let combined = format!("{}{}", generate_name(), mate_name);
+                            let baby_name = if combined.len() > 14 {
+                                combined[..14].to_string()
+                            } else {
+                                combined
+                            };
 
                             // Create the baby
                             let baby = Item::Traveler {
                                 name: baby_name.clone(),
                             };
-                            let baby_effects = vec![
-                                Effect::permanent(EffectType::Healthy, 100),
-                                Effect::permanent(EffectType::Hungry, 30),
-                                Effect::permanent(EffectType::Thirsty, 30),
-                                Effect::temporary(EffectType::Young, 100, 50),
-                            ];
+                            let baby_effects = Effect::default_traveler_effects();
                             actor.effects.push(Effect::permanent(
                                 EffectType::Holding(ItemBox {
                                     item: baby,
@@ -806,6 +793,9 @@ impl ItemBox {
                                 100,
                             ));
                             actor.make_tired();
+                            actor.feel_lonely(-(actor.loneliness() as i32));
+                            target.items[z].feel_lonely(-(item.loneliness() as i32));
+                            target.items[z].make_tired();
                             println!(
                                 "A new traveler {} was born to {} and {}",
                                 baby_name, actor_name, mate_name
