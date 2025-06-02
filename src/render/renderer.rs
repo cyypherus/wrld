@@ -157,12 +157,6 @@ impl Renderer {
                                             item.get_name()
                                         ));
                                     }
-                                    crate::entity::effect::EffectType::PreferredDirection(
-                                        direction,
-                                    ) => {
-                                        effect_desc
-                                            .push_str(&format!(" - Prefers moving {}", direction));
-                                    }
                                     crate::entity::effect::EffectType::Thinking(thought) => {
                                         effect_desc.push_str(&format!(" - Thinking {}", thought));
                                     }
@@ -180,6 +174,10 @@ impl Renderer {
                                     }
                                     crate::entity::effect::EffectType::PathPlanned(_) => {
                                         effect_desc.push_str(" - Path Planned");
+                                    }
+                                    crate::entity::effect::EffectType::Profession(profession) => {
+                                        effect_desc
+                                            .push_str(&format!(" - Profession: {:?}", profession));
                                     }
                                 }
 

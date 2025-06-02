@@ -90,7 +90,7 @@ pub enum Interaction {
 }
 
 /// Container for item data with common properties
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ItemBox {
     /// The specific item type
     pub item: Item,
@@ -307,30 +307,6 @@ impl ItemBox {
             Item::Object(Object::Food(FoodType::Fruit)) => (30, 40, 20),
             Item::Object(Object::Food(FoodType::Vegetable)) => (30, 40, 20),
             _ => (0, 0, 0),
-        }
-    }
-    pub fn preferred_direction(&self) -> Option<Direction> {
-        if let Some(Effect {
-            kind: EffectType::PreferredDirection(d),
-            ..
-        }) = self
-            .effects
-            .iter()
-            .find(|e| matches!(e.kind, EffectType::PreferredDirection(_)))
-        {
-            return Some(*d);
-        }
-        None
-    }
-    pub fn prefer_direction(&mut self, direction: Option<Direction>) {
-        if let Some(direction) = direction {
-            self.effects.push(Effect::permanent(
-                EffectType::PreferredDirection(direction),
-                100,
-            ));
-        } else {
-            self.effects
-                .retain(|e| !matches!(e.kind, EffectType::PreferredDirection(_)));
         }
     }
     pub fn primary_need(&self) -> (Priority, Need) {
@@ -654,7 +630,6 @@ impl ItemBox {
             Item::Mountain => true,
             Item::Snow => false,
             Item::Traveler { .. } => false,
-
             Item::Corpse { .. } => true,
             Item::House { .. } => true,
             Item::Shop { .. } => true,

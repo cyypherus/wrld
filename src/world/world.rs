@@ -1,4 +1,4 @@
-use crate::entity::effect::{Effect, EffectType, FoodType, Object};
+use crate::entity::effect::{Effect, EffectType, Farm, FoodType, Object, Profession};
 use crate::entity::item::{Action, Direction, Interaction, Item, ItemBox, Need, Priority};
 
 use crate::{FOOD_SPAWN_RATE, FluidSim};
@@ -917,39 +917,24 @@ impl World {
                         }
                         _ => {}
                     }
+                } else if fastrand::f32() > 0.95
+                    && self
+                        .find_path(
+                            (x, y),
+                            |item_box| matches!(item_box.item, Item::Water | Item::DeepWater),
+                            10,
+                            None,
+                        )
+                        .is_some()
+                {
+                    item_box.effects.push(Effect::permanent(
+                        EffectType::Profession(Profession::Farmer(Farm { location: (x, y) })),
+                        100,
+                    ));
+                    return Action::Wait;
                 }
 
-                if fastrand::f32() > 0.99 {
-                    let explore_dist = 10;
-                    let explore_direction = [
-                        Direction::North,
-                        Direction::East,
-                        Direction::South,
-                        Direction::West,
-                    ][fastrand::usize(0..4)];
-                    let target = match explore_direction {
-                        Direction::North => (x, y.saturating_sub(explore_dist)),
-                        Direction::East => (x + explore_dist, y),
-                        Direction::South => (x, y + explore_dist),
-                        Direction::West => (x.saturating_sub(explore_dist), y),
-                        _ => unreachable!(),
-                    };
-                    if let Some(path) = self.find_path((x, y), |_| false, 100, Some(target)) {
-                        item_box.forget_path();
-                        item_box.plan_path(path);
-                    }
-                    Action::Wait
-                } else {
-                    // Action::Move(
-                    //     [
-                    //         Direction::North,
-                    //         Direction::East,
-                    //         Direction::South,
-                    //         Direction::West,
-                    //     ][fastrand::usize(0..4)],
-                    // )
-                    Action::Wait
-                }
+                Action::Wait
             }
             _ => Action::Wait,
         }

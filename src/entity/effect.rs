@@ -49,8 +49,18 @@ pub enum ContainerType {
     Bag,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Profession {
+    Farmer(Farm),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Farm {
+    pub location: (usize, usize),
+}
+
 /// Effect that can be applied to entities and items
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Effect {
     /// Type of effect
     pub kind: EffectType,
@@ -61,7 +71,7 @@ pub struct Effect {
 }
 
 /// All possible effect types in the world
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EffectType {
     // Health effects
     Healthy,
@@ -73,8 +83,6 @@ pub enum EffectType {
     // Inventory effects
     Holding(ItemBox), // Holding an item
 
-    PreferredDirection(Direction),
-
     Thinking(String),
 
     Tired,
@@ -85,6 +93,8 @@ pub enum EffectType {
     Wear,
 
     PathPlanned(Vec<(usize, usize)>),
+
+    Profession(Profession),
 }
 
 impl Effect {
@@ -189,9 +199,6 @@ impl fmt::Display for EffectType {
             EffectType::Thirsty => write!(f, "Thirsty"),
 
             EffectType::Holding(item) => write!(f, "Holding {}", item),
-            EffectType::PreferredDirection(_) => {
-                write!(f, "Preferred Direction")
-            }
             EffectType::Thinking(_) => {
                 write!(f, "Thinking")
             }
@@ -209,6 +216,9 @@ impl fmt::Display for EffectType {
             }
             EffectType::Wear => {
                 write!(f, "Wear")
+            }
+            EffectType::Profession(profession) => {
+                write!(f, "Profession: {:?}", profession)
             }
         }
     }
